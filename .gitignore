@@ -1,0 +1,17 @@
+# Claude internal
+CLAUDE.md
+**/CLAUDE.md
+.claude/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Node
+node_modules/
+npm-debug.log*
+
+# OS
+.DS_Store
+*.log

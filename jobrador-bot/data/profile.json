@@ -1,0 +1,81 @@
+{
+  "name": "Matija Goršek",
+  "title": "Senior Android Developer & AI Systems Architect",
+  "location": "Osijek, Croatia",
+  "yearsExperience": 12,
+  "currentRole": {
+    "title": "Android Developer",
+    "company": "Kickbase",
+    "since": "2025-03"
+  },
+  "skills": {
+    "primary": ["Kotlin", "Java", "Android SDK", "Jetpack Compose", "MVVM", "Clean Architecture"],
+    "frameworks": ["Hilt", "Koin", "Retrofit", "Room", "Coroutines", "Flow"],
+    "ai": ["Model Context Protocol (MCP)", "Agentic AI Workflows", "Claude Code", "LLM Integration", "AI-Assisted Development"],
+    "infrastructure": ["Firebase", "Crashlytics", "GitLab CI/CD", "Jira", "Figma", "FFmpeg"],
+    "other": ["Bluetooth LE", "IoT", "Express.js", "Cloudflare Tunnel"]
+  },
+  "preferredRoles": [
+    "Senior Android Developer",
+    "Staff Android Engineer", 
+    "Mobile Tech Lead",
+    "AI Platform Engineer",
+    "Mobile Architect",
+    "AI-Assisted Development Lead"
+  ],
+  "preferences": {
+    "remote": true,
+    "contractType": ["full-time", "contract"],
+    "salaryRange": { "min": 100000, "max": 200000, "currency": "USD" },
+    "timezone": "CET (UTC+1)",
+    "languages": ["English", "Croatian"]
+  },
+  "experience": [
+    {
+      "title": "Android Developer",
+      "company": "Kickbase",
+      "period": "Mar 2025 - Present",
+      "highlights": ["Fantasy football platform", "Kotlin", "Modern Android architecture"]
+    },
+    {
+      "title": "Software Architect & Senior Android Developer",
+      "company": "COBE",
+      "period": "Dec 2018 - Feb 2025",
+      "highlights": [
+        "Promoted to Software Architect",
+        "Led multiple Android projects (betting, travel, IoT)",
+        "Kotlin, MVVM, DI (Koin, Hilt), Bluetooth LE",
+        "Team mentoring and tech stack selection"
+      ]
+    },
+    {
+      "title": "Android Developer",
+      "company": "Humanizing Technologies GmbH",
+      "period": "Feb 2018 - Oct 2018",
+      "highlights": ["SoftBank Pepper robot SDK", "Tight deadline delivery"]
+    },
+    {
+      "title": "Co-Founder & Android Developer",
+      "company": "Marrow Labs",
+      "period": "May 2017 - Jun 2018",
+      "highlights": ["Co-founded tech company", "Multiple client and internal projects"]
+    }
+  ],
+  "aiProjects": [
+    {
+      "name": "Jarvis",
+      "description": "AI Development Orchestration System",
+      "details": [
+        "MCP integrations: Jira, GitLab, Firebase, Figma, FFmpeg",
+        "Slack bridge, voice notifications, Apple Watch shortcuts",
+        "Proactive Crashlytics anomaly detection",
+        "Telegram-to-Claude pipeline with Cloudflare Tunnel",
+        "Multi-project codebase support"
+      ]
+    }
+  ],
+  "education": {
+    "school": "High School Valpovo",
+    "degree": "Electrical Technician"
+  }
+}

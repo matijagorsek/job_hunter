@@ -1,17 +1,11 @@
-# Claude internal
-CLAUDE.md
-**/CLAUDE.md
-.claude/
-
-# Secrets
 .env
-.env.*
-!.env.example
-
-# Node
-node_modules/
-npm-debug.log*
-
-# OS
+*.env
+__pycache__/
+*.pyc
+*.pyo
 .DS_Store
+node_modules/
+.venv/
+venv/
 *.log
+node_modules/

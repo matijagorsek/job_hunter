@@ -9,6 +9,7 @@ app.use(express.json());
 const PORT = process.env.PORT || 3847;
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 const WEBHOOK_URL = `https://${process.env.WEBHOOK_DOMAIN}/webhook`;
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 
 // Health check
 app.get("/", (_req, res) => {
@@ -21,6 +22,11 @@ app.get("/", (_req, res) => {
 
 // Telegram webhook endpoint
 app.post("/webhook", async (req, res) => {
+  // Validate request came from Telegram using secret token
+  if (WEBHOOK_SECRET && req.headers["x-telegram-bot-api-secret-token"] !== WEBHOOK_SECRET) {
+    return res.sendStatus(401);
+  }
+
   // Respond immediately so Telegram doesn't retry
   res.sendStatus(200);
 
@@ -44,6 +50,7 @@ async function setupWebhook() {
         url: WEBHOOK_URL,
         allowed_updates: ["message"],
         drop_pending_updates: true,
+        ...(WEBHOOK_SECRET && { secret_token: WEBHOOK_SECRET }),
       }),
     });
 

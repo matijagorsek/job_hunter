@@ -5,6 +5,9 @@ const { generateCoverLetter } = require("./agents/coverLetter");
 const { salaryIntel } = require("./agents/salary");
 
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
+const ALLOWED_CHAT_IDS = process.env.ALLOWED_CHAT_IDS
+  ? process.env.ALLOWED_CHAT_IDS.split(",").map((id) => id.trim())
+  : [];
 
 // Per-user conversation history (in-memory, resets on restart)
 const conversations = new Map();
@@ -102,6 +105,12 @@ async function handleUpdate(update) {
   const chatId = message.chat.id;
   const userId = message.from.id;
   const text = message.text.trim();
+
+  // Enforce chat ID allowlist
+  if (ALLOWED_CHAT_IDS.length > 0 && !ALLOWED_CHAT_IDS.includes(String(chatId))) {
+    console.warn(`Rejected message from unauthorized chat ID: ${chatId}`);
+    return;
+  }
 
   // Show typing indicator
   await sendTyping(chatId);

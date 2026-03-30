@@ -22,8 +22,7 @@ app.get("/", (_req, res) => {
 
 // Telegram webhook endpoint
 app.post("/webhook", async (req, res) => {
-  // Validate request came from Telegram using secret token
-  if (WEBHOOK_SECRET && req.headers["x-telegram-bot-api-secret-token"] !== WEBHOOK_SECRET) {
+  if (!WEBHOOK_SECRET || req.headers["x-telegram-bot-api-secret-token"] !== WEBHOOK_SECRET) {
     return res.sendStatus(401);
   }
 

@@ -104,7 +104,7 @@ async function handleUpdate(update) {
   if (!message?.text) return;
 
   const chatId = message.chat.id;
-  if (ALLOWED_CHAT_IDS.length > 0 && !ALLOWED_CHAT_IDS.includes(chatId)) return;
+  if (!ALLOWED_CHAT_IDS.includes(chatId)) return;
   const userId = message.from.id;
   const text = message.text.trim();
 

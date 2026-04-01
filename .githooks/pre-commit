@@ -1,0 +1,12 @@
+#!/bin/sh
+# Block commits that contain credential-shaped strings.
+# Activate with: git config core.hooksPath .githooks
+
+PATTERN='(TELEGRAM_BOT_TOKEN|BOT_TOKEN|ANTHROPIC_API_KEY|WEBHOOK_SECRET)\s*=\s*[^${"'"'"'<>[:space:]][^[:space:]]{8,}'
+
+if git diff --cached --name-only | xargs grep -Eq "$PATTERN" 2>/dev/null; then
+    echo "ERROR: Staged files appear to contain credentials. Use environment variables instead." >&2
+    echo "       Offending lines:" >&2
+    git diff --cached | grep -E "^\+.*${PATTERN}" >&2
+    exit 1
+fi

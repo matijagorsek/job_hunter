@@ -104,7 +104,10 @@ async function handleUpdate(update) {
   if (!message?.text) return;
 
   const chatId = message.chat.id;
-  if (!ALLOWED_CHAT_IDS.includes(chatId)) return;
+  if (!ALLOWED_CHAT_IDS.includes(chatId)) {
+    await sendMessage(chatId, "Unauthorised");
+    return;
+  }
   const userId = message.from.id;
   const text = message.text.trim();
 

@@ -6,6 +6,11 @@ const { handleUpdate } = require("./bot");
 const app = express();
 app.use(express.json());
 
+if (!process.env.ALLOWED_CHAT_IDS) {
+  console.error("FATAL: ALLOWED_CHAT_IDS env var is not set. Refusing to start.");
+  process.exit(1);
+}
+
 const PORT = process.env.PORT || 3847;
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 const WEBHOOK_URL = `https://${process.env.WEBHOOK_DOMAIN}/webhook`;

@@ -9,4 +9,5 @@ node_modules/
 .venv/
 venv/
 *.log
-node_modules/
+core
+core.*

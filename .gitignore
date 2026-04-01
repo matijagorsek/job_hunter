@@ -1,5 +1,6 @@
 .env
 *.env
+*.key
 __pycache__/
 *.pyc
 *.pyo
@@ -8,4 +9,5 @@ node_modules/
 .venv/
 venv/
 *.log
-node_modules/
+core
+core.*

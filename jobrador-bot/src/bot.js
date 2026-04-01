@@ -6,6 +6,10 @@ const { salaryIntel } = require("./agents/salary");
 
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 
+const ALLOWED_CHAT_IDS = process.env.ALLOWED_CHAT_IDS
+  ? process.env.ALLOWED_CHAT_IDS.split(",").map((id) => parseInt(id.trim(), 10))
+  : [];
+
 // Per-user conversation history (in-memory, resets on restart)
 const conversations = new Map();
 const MAX_HISTORY = 20; // keep last 20 messages per user
@@ -100,6 +104,10 @@ async function handleUpdate(update) {
   if (!message?.text) return;
 
   const chatId = message.chat.id;
+  if (!ALLOWED_CHAT_IDS.includes(chatId)) {
+    await sendMessage(chatId, "Unauthorised");
+    return;
+  }
   const userId = message.from.id;
   const text = message.text.trim();
 

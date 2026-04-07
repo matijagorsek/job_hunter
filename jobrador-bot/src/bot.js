@@ -3,6 +3,8 @@ const { searchJobs } = require("./agents/jobSearch");
 const { adviseCv } = require("./agents/cvAdvisor");
 const { generateCoverLetter } = require("./agents/coverLetter");
 const { salaryIntel } = require("./agents/salary");
+const pdfParse = require("pdf-parse");
+const mammoth = require("mammoth");
 
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 
@@ -99,9 +101,60 @@ async function sendTyping(chatId) {
   }).catch(() => {});
 }
 
+const SUPPORTED_CV_MIME_TYPES = {
+  "application/pdf": "pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+};
+
+async function downloadTelegramFile(fileId) {
+  const res = await fetch(`${TELEGRAM_API}/getFile?file_id=${encodeURIComponent(fileId)}`);
+  const data = await res.json();
+  const filePath = data.result.file_path;
+  const fileRes = await fetch(
+    `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${filePath}`,
+  );
+  return Buffer.from(await fileRes.arrayBuffer());
+}
+
+async function extractTextFromBuffer(buffer, format) {
+  if (format === "pdf") {
+    const data = await pdfParse(buffer);
+    return data.text;
+  }
+  if (format === "docx") {
+    const result = await mammoth.extractRawText({ buffer });
+    return result.value;
+  }
+  return null;
+}
+
+async function handleDocument(chatId, userId, document) {
+  const format = SUPPORTED_CV_MIME_TYPES[document.mime_type];
+  if (!format) {
+    await sendMessage(chatId, "Unsupported file format. Please send a PDF or DOCX file.");
+    return;
+  }
+
+  await sendMessage(chatId, `📄 Processing your CV (${format.toUpperCase()})...`);
+  await sendTyping(chatId);
+
+  const buffer = await downloadTelegramFile(document.file_id);
+  const text = await extractTextFromBuffer(buffer, format);
+
+  if (!text || text.trim().length < 50) {
+    await sendMessage(chatId, "Could not extract text from the file. Please ensure it contains readable text.");
+    return;
+  }
+
+  const advice = await adviseCv(`Analyze this CV:\n\n${text}`);
+  addToHistory(userId, "user", `Uploaded CV (${format.toUpperCase()}): ${document.file_name || "cv"}`);
+  addToHistory(userId, "assistant", advice);
+  await sendMessage(chatId, advice);
+}
+
 async function handleUpdate(update) {
   const message = update.message;
-  if (!message?.text) return;
+  if (!message) return;
 
   const chatId = message.chat.id;
   if (!ALLOWED_CHAT_IDS.includes(chatId)) {
@@ -109,17 +162,19 @@ async function handleUpdate(update) {
     return;
   }
   const userId = message.from.id;
-  const text = message.text.trim();
 
-  // Show typing indicator
   await sendTyping(chatId);
 
   try {
-    // Command routing
-    if (text.startsWith("/")) {
-      await handleCommand(chatId, userId, text);
-    } else {
-      await handleChat(chatId, userId, text);
+    if (message.document) {
+      await handleDocument(chatId, userId, message.document);
+    } else if (message.text) {
+      const text = message.text.trim();
+      if (text.startsWith("/")) {
+        await handleCommand(chatId, userId, text);
+      } else {
+        await handleChat(chatId, userId, text);
+      }
     }
   } catch (error) {
     console.error("Error handling message:", error);
@@ -153,6 +208,7 @@ async function handleCommand(chatId, userId, text) {
           `🔍 /search _keywords_ — Search with specific terms\n` +
           `🔍 /search --location europe --type fulltime --industry fintech\n` +
           `📄 /cv — Get CV improvement advice\n` +
+          `📎 Send a PDF or DOCX file to analyze that CV\n` +
           `✉️ /cover — Generate a cover letter\n` +
           `💰 /salary — Salary market insights\n` +
           `👤 /profile — View your profile summary\n\n` +

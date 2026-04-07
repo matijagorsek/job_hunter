@@ -28,10 +28,19 @@ Present 4-5 jobs sorted by match percentage. Mix different company sizes (startu
 
 If the user specifies keywords, focus on those. Otherwise, search broadly across Android, Mobile, and AI-adjacent roles.`;
 
-async function searchJobs(query) {
-  const userMsg = query
+async function searchJobs(query, filters = {}) {
+  let userMsg = query
     ? `Search for remote jobs matching: "${query}"`
     : "Find the best remote job matches for my profile right now. Include a mix of pure Android roles and AI-adjacent roles.";
+
+  const constraints = [];
+  if (filters.location) constraints.push(`Location preference: ${filters.location}`);
+  if (filters.type) constraints.push(`Job type: ${filters.type}`);
+  if (filters.industry) constraints.push(`Industry/sector: ${filters.industry}`);
+
+  if (constraints.length > 0) {
+    userMsg += `\n\nFilters to apply:\n${constraints.map((c) => `- ${c}`).join("\n")}`;
+  }
 
   return runAgent(AGENT_PROMPT, userMsg);
 }

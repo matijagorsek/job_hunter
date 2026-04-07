@@ -16,6 +16,25 @@ const ALLOWED_CHAT_IDS = process.env.ALLOWED_CHAT_IDS
 const conversations = new Map();
 const MAX_HISTORY = 20; // keep last 20 messages per user
 
+// Rate limiting: max 5 requests per 60 seconds per user
+const rateLimitMap = new Map();
+const RATE_LIMIT_MAX = 5;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+
+function isRateLimited(userId) {
+  const now = Date.now();
+  const timestamps = (rateLimitMap.get(userId) || []).filter(
+    (t) => now - t < RATE_LIMIT_WINDOW_MS,
+  );
+  if (timestamps.length >= RATE_LIMIT_MAX) {
+    rateLimitMap.set(userId, timestamps);
+    return true;
+  }
+  timestamps.push(now);
+  rateLimitMap.set(userId, timestamps);
+  return false;
+}
+
 function getHistory(userId) {
   if (!conversations.has(userId)) {
     conversations.set(userId, []);
@@ -163,6 +182,14 @@ async function handleUpdate(update) {
   }
   const userId = message.from.id;
 
+  if (isRateLimited(userId)) {
+    await sendMessage(
+      chatId,
+      `⏳ You're sending too many requests. Please wait a moment before trying again.`,
+    );
+    return;
+  }
+
   await sendTyping(chatId);
 
   try {
@@ -177,8 +204,16 @@ async function handleUpdate(update) {
       }
     }
   } catch (error) {
-    console.error("Error handling message:", error);
-    await sendMessage(chatId, "⚠️ Something went wrong. Try again in a moment.");
+    console.error("Error handling message:", { userId, chatId, error: error.message, stack: error.stack });
+    let userMessage = "⚠️ Something went wrong. Try again in a moment.";
+    if (error?.status === 429 || error?.message?.toLowerCase().includes("rate limit")) {
+      userMessage = "⚠️ AI service is busy right now. Please wait a moment and try again.";
+    } else if (error?.code === "ECONNRESET" || error?.message?.toLowerCase().includes("timeout")) {
+      userMessage = "⚠️ Request timed out. Please try again.";
+    } else if (error?.status >= 500) {
+      userMessage = "⚠️ AI service is temporarily unavailable. Please try again later.";
+    }
+    await sendMessage(chatId, userMessage);
   }
 }
 

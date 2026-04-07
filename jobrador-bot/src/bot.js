@@ -127,9 +127,20 @@ async function handleUpdate(update) {
   }
 }
 
+function parseFilters(input) {
+  const filters = {};
+  const filterPattern = /--?(location|type|industry)\s+([^\s-][^\s]*)/gi;
+  let match;
+  while ((match = filterPattern.exec(input)) !== null) {
+    filters[match[1].toLowerCase()] = match[2];
+  }
+  const query = input.replace(/--?(location|type|industry)\s+\S+/gi, "").trim();
+  return { query, filters };
+}
+
 async function handleCommand(chatId, userId, text) {
   const [command, ...args] = text.split(" ");
-  const query = args.join(" ");
+  const rawArgs = args.join(" ");
 
   switch (command.toLowerCase().replace(/@\w+/, "")) {
     case "/start":
@@ -140,6 +151,7 @@ async function handleCommand(chatId, userId, text) {
           `Hey ${profile.name}! Here's what I can do:\n\n` +
           `🔍 /search — Find remote jobs for your profile\n` +
           `🔍 /search _keywords_ — Search with specific terms\n` +
+          `🔍 /search --location europe --type fulltime --industry fintech\n` +
           `📄 /cv — Get CV improvement advice\n` +
           `✉️ /cover — Generate a cover letter\n` +
           `💰 /salary — Salary market insights\n` +
@@ -153,26 +165,28 @@ async function handleCommand(chatId, userId, text) {
       );
       break;
 
-    case "/search":
+    case "/search": {
+      const { query: searchQuery, filters } = parseFilters(rawArgs);
       await sendMessage(chatId, "🔍 Scanning job boards...");
       await sendTyping(chatId);
-      const jobs = await searchJobs(query);
-      addToHistory(userId, "user", `Search for jobs: ${query || "general search"}`);
+      const jobs = await searchJobs(searchQuery, filters);
+      addToHistory(userId, "user", `Search for jobs: ${searchQuery || "general search"}`);
       addToHistory(userId, "assistant", jobs);
       await sendMessage(chatId, jobs);
       break;
+    }
 
     case "/cv":
       await sendMessage(chatId, "📄 Analyzing your CV...");
       await sendTyping(chatId);
-      const cvAdvice = await adviseCv(query);
-      addToHistory(userId, "user", `CV advice: ${query || "general review"}`);
+      const cvAdvice = await adviseCv(rawArgs);
+      addToHistory(userId, "user", `CV advice: ${rawArgs || "general review"}`);
       addToHistory(userId, "assistant", cvAdvice);
       await sendMessage(chatId, cvAdvice);
       break;
 
     case "/cover":
-      if (!query) {
+      if (!rawArgs) {
         await sendMessage(
           chatId,
           "✉️ Tell me the role! Example:\n`/cover Staff Android Engineer at Spotify`",
@@ -181,8 +195,8 @@ async function handleCommand(chatId, userId, text) {
       }
       await sendMessage(chatId, "✉️ Writing your cover letter...");
       await sendTyping(chatId);
-      const letter = await generateCoverLetter(query);
-      addToHistory(userId, "user", `Cover letter: ${query}`);
+      const letter = await generateCoverLetter(rawArgs);
+      addToHistory(userId, "user", `Cover letter: ${rawArgs}`);
       addToHistory(userId, "assistant", letter);
       await sendMessage(chatId, letter);
       break;
@@ -190,8 +204,8 @@ async function handleCommand(chatId, userId, text) {
     case "/salary":
       await sendMessage(chatId, "💰 Researching market rates...");
       await sendTyping(chatId);
-      const salary = await salaryIntel(query);
-      addToHistory(userId, "user", `Salary info: ${query || "general"}`);
+      const salary = await salaryIntel(rawArgs);
+      addToHistory(userId, "user", `Salary info: ${rawArgs || "general"}`);
       addToHistory(userId, "assistant", salary);
       await sendMessage(chatId, salary);
       break;

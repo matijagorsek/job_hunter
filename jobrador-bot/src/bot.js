@@ -3,6 +3,7 @@ const { searchJobs } = require("./agents/jobSearch");
 const { adviseCv } = require("./agents/cvAdvisor");
 const { generateCoverLetter } = require("./agents/coverLetter");
 const { salaryIntel } = require("./agents/salary");
+const { detectLanguage, t } = require("./i18n");
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
 const logger = require("./logger");
@@ -16,6 +17,9 @@ const ALLOWED_CHAT_IDS = process.env.ALLOWED_CHAT_IDS
 // Per-user conversation history (in-memory, resets on restart)
 const conversations = new Map();
 const MAX_HISTORY = 20; // keep last 20 messages per user
+
+// Per-user language preference (detected from messages)
+const userLanguages = new Map();
 
 // Rate limiting: max 5 requests per 60 seconds per user
 const rateLimitMap = new Map();
@@ -148,21 +152,21 @@ async function extractTextFromBuffer(buffer, format) {
   return null;
 }
 
-async function handleDocument(chatId, userId, document) {
+async function handleDocument(chatId, userId, document, lang = "en") {
   const format = SUPPORTED_CV_MIME_TYPES[document.mime_type];
   if (!format) {
-    await sendMessage(chatId, "Unsupported file format. Please send a PDF or DOCX file.");
+    await sendMessage(chatId, t(lang, "unsupportedFile"));
     return;
   }
 
-  await sendMessage(chatId, `📄 Processing your CV (${format.toUpperCase()})...`);
+  await sendMessage(chatId, t(lang, "processingCv", format.toUpperCase()));
   await sendTyping(chatId);
 
   const buffer = await downloadTelegramFile(document.file_id);
   const text = await extractTextFromBuffer(buffer, format);
 
   if (!text || text.trim().length < 50) {
-    await sendMessage(chatId, "Could not extract text from the file. Please ensure it contains readable text.");
+    await sendMessage(chatId, t(lang, "cvExtractError"));
     return;
   }
 
@@ -178,16 +182,19 @@ async function handleUpdate(update) {
 
   const chatId = message.chat.id;
   if (!ALLOWED_CHAT_IDS.includes(chatId)) {
-    await sendMessage(chatId, "Unauthorised");
+    await sendMessage(chatId, t("en", "unauthorized"));
     return;
   }
   const userId = message.from.id;
 
+  // Detect and persist user language from text messages
+  if (message.text && !message.text.startsWith("/")) {
+    userLanguages.set(userId, detectLanguage(message.text));
+  }
+  const lang = userLanguages.get(userId) || "en";
+
   if (isRateLimited(userId)) {
-    await sendMessage(
-      chatId,
-      `⏳ You're sending too many requests. Please wait a moment before trying again.`,
-    );
+    await sendMessage(chatId, t(lang, "rateLimit"));
     return;
   }
 
@@ -195,24 +202,24 @@ async function handleUpdate(update) {
 
   try {
     if (message.document) {
-      await handleDocument(chatId, userId, message.document);
+      await handleDocument(chatId, userId, message.document, lang);
     } else if (message.text) {
       const text = message.text.trim();
       if (text.startsWith("/")) {
-        await handleCommand(chatId, userId, text);
+        await handleCommand(chatId, userId, text, lang);
       } else {
         await handleChat(chatId, userId, text);
       }
     }
   } catch (error) {
     logger.error("Error handling message", { userId, chatId, message: error.message, stack: error.stack });
-    let userMessage = "⚠️ Something went wrong. Try again in a moment.";
+    let userMessage = t(lang, "errorGeneric");
     if (error?.status === 429 || error?.message?.toLowerCase().includes("rate limit")) {
-      userMessage = "⚠️ AI service is busy right now. Please wait a moment and try again.";
+      userMessage = t(lang, "errorAiBusy");
     } else if (error?.code === "ECONNRESET" || error?.message?.toLowerCase().includes("timeout")) {
-      userMessage = "⚠️ Request timed out. Please try again.";
+      userMessage = t(lang, "errorTimeout");
     } else if (error?.status >= 500) {
-      userMessage = "⚠️ AI service is temporarily unavailable. Please try again later.";
+      userMessage = t(lang, "errorUnavailable");
     }
     await sendMessage(chatId, userMessage);
   }
@@ -229,41 +236,19 @@ function parseFilters(input) {
   return { query, filters };
 }
 
-async function handleCommand(chatId, userId, text) {
+async function handleCommand(chatId, userId, text, lang = "en") {
   const [command, ...args] = text.split(" ");
   const rawArgs = args.join(" ");
 
   switch (command.toLowerCase().replace(/@\w+/, "")) {
     case "/start":
     case "/help":
-      await sendMessage(
-        chatId,
-        `🎯 *JobRadar AI* — Your Career Assistant\n\n` +
-          `Hey ${profile.name}! Here's what I can do:\n\n` +
-          `🔍 /search — Find remote jobs for your profile\n` +
-          `🔍 /search _keywords_ — Search with specific terms\n` +
-          `🔍 /search --location europe --type fulltime --industry fintech\n` +
-          `📄 /cv — Get CV improvement advice\n` +
-          `📎 Send a PDF or DOCX file to analyze that CV\n` +
-          `✉️ /cover — Generate a cover letter\n` +
-          `💰 /salary — Salary market insights\n` +
-          `💰 /salary --role <role> --location <location>\n` +
-          `👤 /profile — View your profile summary\n` +
-          `👤 /profile set skills <list> — Update skills\n` +
-          `👤 /profile set roles <list> — Update preferred roles\n` +
-          `👤 /profile set salary <min>-<max> — Update salary range\n\n` +
-          `Or just chat naturally! I understand context.\n\n` +
-          `_Examples:_\n` +
-          `• "Find Android jobs paying over $150k"\n` +
-          `• "Write a cover letter for Spotify"\n` +
-          `• "Is my CV good for FAANG?"\n` +
-          `• "What should I charge as a contractor?"`,
-      );
+      await sendMessage(chatId, t(lang, "helpText", profile.name));
       break;
 
     case "/search": {
       const { query: searchQuery, filters } = parseFilters(rawArgs);
-      await sendMessage(chatId, "🔍 Scanning job boards...");
+      await sendMessage(chatId, t(lang, "scanningJobs"));
       await sendTyping(chatId);
       const jobs = await searchJobs(searchQuery, filters);
       addToHistory(userId, "user", `Search for jobs: ${searchQuery || "general search"}`);
@@ -273,7 +258,7 @@ async function handleCommand(chatId, userId, text) {
     }
 
     case "/cv":
-      await sendMessage(chatId, "📄 Analyzing your CV...");
+      await sendMessage(chatId, t(lang, "analyzingCv"));
       await sendTyping(chatId);
       const cvAdvice = await adviseCv(rawArgs);
       addToHistory(userId, "user", `CV advice: ${rawArgs || "general review"}`);
@@ -283,13 +268,10 @@ async function handleCommand(chatId, userId, text) {
 
     case "/cover":
       if (!rawArgs) {
-        await sendMessage(
-          chatId,
-          "✉️ Tell me the role! Example:\n`/cover Staff Android Engineer at Spotify`",
-        );
+        await sendMessage(chatId, t(lang, "coverLetterPrompt"));
         return;
       }
-      await sendMessage(chatId, "✉️ Writing your cover letter...");
+      await sendMessage(chatId, t(lang, "writingCoverLetter"));
       await sendTyping(chatId);
       const letter = await generateCoverLetter(rawArgs);
       addToHistory(userId, "user", `Cover letter: ${rawArgs}`);
@@ -306,7 +288,7 @@ async function handleCommand(chatId, userId, text) {
         salaryFilters[salaryMatch[1].toLowerCase()] = salaryMatch[2].trim();
       }
       const salaryQuery = salaryFilterInput.replace(/--?(location|role)\s+\S+/gi, "").trim();
-      await sendMessage(chatId, "💰 Researching market rates...");
+      await sendMessage(chatId, t(lang, "researchingRates"));
       await sendTyping(chatId);
       const salary = await salaryIntel(salaryQuery || null, salaryFilters.location, salaryFilters.role);
       const salaryLabel = [salaryFilters.role, salaryFilters.location, salaryQuery].filter(Boolean).join(", ") || "general";
@@ -322,15 +304,7 @@ async function handleCommand(chatId, userId, text) {
         const field = args[1];
         const value = args.slice(2).join(" ").trim();
         if (!field || !value) {
-          await sendMessage(
-            chatId,
-            `Usage:\n` +
-              "`/profile set title <title>`\n" +
-              "`/profile set skills <skill1, skill2, ...>`\n" +
-              "`/profile set roles <role1, role2, ...>`\n" +
-              "`/profile set salary <min>-<max>` (USD)\n" +
-              "`/profile set location <location>`",
-          );
+          await sendMessage(chatId, t(lang, "profileUsage"));
           break;
         }
         switch (field.toLowerCase()) {
@@ -349,7 +323,7 @@ async function handleCommand(chatId, userId, text) {
           case "salary": {
             const parts = value.split("-").map((s) => parseInt(s.trim(), 10));
             if (parts.length !== 2 || isNaN(parts[0]) || isNaN(parts[1])) {
-              await sendMessage(chatId, "Invalid salary format. Use: `/profile set salary 100000-200000`");
+              await sendMessage(chatId, t(lang, "invalidSalary"));
               break;
             }
             profile.preferences.salaryRange.min = parts[0];
@@ -357,11 +331,11 @@ async function handleCommand(chatId, userId, text) {
             break;
           }
           default:
-            await sendMessage(chatId, `Unknown field: \`${field}\`. Valid fields: title, location, skills, roles, salary`);
+            await sendMessage(chatId, t(lang, "unknownField", field));
             break;
         }
         saveProfile();
-        await sendMessage(chatId, `✅ Profile updated: *${field}*`);
+        await sendMessage(chatId, t(lang, "profileUpdated", field));
         break;
       }
 
@@ -387,7 +361,7 @@ async function handleCommand(chatId, userId, text) {
     }
 
     default:
-      await sendMessage(chatId, "Unknown command. Try /help to see what I can do.");
+      await sendMessage(chatId, t(lang, "unknownCommand"));
   }
 }
 

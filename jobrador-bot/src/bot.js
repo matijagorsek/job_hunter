@@ -1,4 +1,4 @@
-const { chat, profile } = require("./claude");
+const { chat, profile, saveProfile } = require("./claude");
 const { searchJobs } = require("./agents/jobSearch");
 const { adviseCv } = require("./agents/cvAdvisor");
 const { generateCoverLetter } = require("./agents/coverLetter");
@@ -247,7 +247,10 @@ async function handleCommand(chatId, userId, text) {
           `📎 Send a PDF or DOCX file to analyze that CV\n` +
           `✉️ /cover — Generate a cover letter\n` +
           `💰 /salary — Salary market insights\n` +
-          `👤 /profile — View your profile summary\n\n` +
+          `👤 /profile — View your profile summary\n` +
+          `👤 /profile set skills <list> — Update skills\n` +
+          `👤 /profile set roles <list> — Update preferred roles\n` +
+          `👤 /profile set salary <min>-<max> — Update salary range\n\n` +
           `Or just chat naturally! I understand context.\n\n` +
           `_Examples:_\n` +
           `• "Find Android jobs paying over $150k"\n` +
@@ -302,8 +305,56 @@ async function handleCommand(chatId, userId, text) {
       await sendMessage(chatId, salary);
       break;
 
-    case "/profile":
-      const skills = [
+    case "/profile": {
+      const subCmd = args[0];
+      if (subCmd === "set") {
+        const field = args[1];
+        const value = args.slice(2).join(" ").trim();
+        if (!field || !value) {
+          await sendMessage(
+            chatId,
+            `Usage:\n` +
+              "`/profile set title <title>`\n" +
+              "`/profile set skills <skill1, skill2, ...>`\n" +
+              "`/profile set roles <role1, role2, ...>`\n" +
+              "`/profile set salary <min>-<max>` (USD)\n" +
+              "`/profile set location <location>`",
+          );
+          break;
+        }
+        switch (field.toLowerCase()) {
+          case "title":
+            profile.title = value;
+            break;
+          case "location":
+            profile.location = value;
+            break;
+          case "skills":
+            profile.skills.primary = value.split(",").map((s) => s.trim()).filter(Boolean);
+            break;
+          case "roles":
+            profile.preferredRoles = value.split(",").map((s) => s.trim()).filter(Boolean);
+            break;
+          case "salary": {
+            const parts = value.split("-").map((s) => parseInt(s.trim(), 10));
+            if (parts.length !== 2 || isNaN(parts[0]) || isNaN(parts[1])) {
+              await sendMessage(chatId, "Invalid salary format. Use: `/profile set salary 100000-200000`");
+              break;
+            }
+            profile.preferences.salaryRange.min = parts[0];
+            profile.preferences.salaryRange.max = parts[1];
+            break;
+          }
+          default:
+            await sendMessage(chatId, `Unknown field: \`${field}\`. Valid fields: title, location, skills, roles, salary`);
+            break;
+        }
+        saveProfile();
+        await sendMessage(chatId, `✅ Profile updated: *${field}*`);
+        break;
+      }
+
+      const profileSkills = [
         ...profile.skills.primary,
         ...profile.skills.ai.slice(0, 3),
       ];
@@ -315,12 +366,14 @@ async function handleCommand(chatId, userId, text) {
           `📍 ${profile.location}\n` +
           `💼 ${profile.yearsExperience}+ years experience\n` +
           `🏢 Currently: ${profile.currentRole.title} @ ${profile.currentRole.company}\n\n` +
-          `*Key Skills:* ${skills.join(", ")}\n\n` +
+          `*Key Skills:* ${profileSkills.join(", ")}\n\n` +
           `*Looking for:* ${profile.preferredRoles.slice(0, 4).join(", ")}\n` +
           `*Salary:* $${profile.preferences.salaryRange.min / 1000}k-$${profile.preferences.salaryRange.max / 1000}k\n` +
-          `*Type:* Full remote, ${profile.preferences.contractType.join(" or ")}`,
+          `*Type:* Full remote, ${profile.preferences.contractType.join(" or ")}\n\n` +
+          `_Use /profile set <field> <value> to update_`,
       );
       break;
+    }
 
     default:
       await sendMessage(chatId, "Unknown command. Try /help to see what I can do.");

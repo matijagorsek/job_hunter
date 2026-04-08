@@ -247,6 +247,7 @@ async function handleCommand(chatId, userId, text) {
           `📎 Send a PDF or DOCX file to analyze that CV\n` +
           `✉️ /cover — Generate a cover letter\n` +
           `💰 /salary — Salary market insights\n` +
+          `💰 /salary --role <role> --location <location>\n` +
           `👤 /profile — View your profile summary\n` +
           `👤 /profile set skills <list> — Update skills\n` +
           `👤 /profile set roles <list> — Update preferred roles\n` +
@@ -296,14 +297,24 @@ async function handleCommand(chatId, userId, text) {
       await sendMessage(chatId, letter);
       break;
 
-    case "/salary":
+    case "/salary": {
+      const salaryFilterPattern = /--?(location|role)\s+([^\s-][^\s]*(?:\s+[^\s-][^\s]*)*?)(?=\s+--|$)/gi;
+      let salaryMatch;
+      const salaryFilters = {};
+      let salaryFilterInput = rawArgs;
+      while ((salaryMatch = salaryFilterPattern.exec(rawArgs)) !== null) {
+        salaryFilters[salaryMatch[1].toLowerCase()] = salaryMatch[2].trim();
+      }
+      const salaryQuery = salaryFilterInput.replace(/--?(location|role)\s+\S+/gi, "").trim();
       await sendMessage(chatId, "💰 Researching market rates...");
       await sendTyping(chatId);
-      const salary = await salaryIntel(rawArgs);
-      addToHistory(userId, "user", `Salary info: ${rawArgs || "general"}`);
+      const salary = await salaryIntel(salaryQuery || null, salaryFilters.location, salaryFilters.role);
+      const salaryLabel = [salaryFilters.role, salaryFilters.location, salaryQuery].filter(Boolean).join(", ") || "general";
+      addToHistory(userId, "user", `Salary info: ${salaryLabel}`);
       addToHistory(userId, "assistant", salary);
       await sendMessage(chatId, salary);
       break;
+    }
 
     case "/profile": {
       const subCmd = args[0];

@@ -5,6 +5,7 @@ const { generateCoverLetter } = require("./agents/coverLetter");
 const { salaryIntel } = require("./agents/salary");
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
+const logger = require("./logger");
 
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 
@@ -204,7 +205,7 @@ async function handleUpdate(update) {
       }
     }
   } catch (error) {
-    console.error("Error handling message:", { userId, chatId, error: error.message, stack: error.stack });
+    logger.error("Error handling message", { userId, chatId, message: error.message, stack: error.stack });
     let userMessage = "⚠️ Something went wrong. Try again in a moment.";
     if (error?.status === 429 || error?.message?.toLowerCase().includes("rate limit")) {
       userMessage = "⚠️ AI service is busy right now. Please wait a moment and try again.";

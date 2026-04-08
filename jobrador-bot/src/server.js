@@ -2,19 +2,20 @@ require("dotenv").config();
 
 const express = require("express");
 const { handleUpdate } = require("./bot");
+const logger = require("./logger");
 
 const app = express();
 app.use(express.json());
 
 if (!process.env.ALLOWED_CHAT_IDS) {
-  console.error("FATAL: ALLOWED_CHAT_IDS env var is not set. Refusing to start.");
+  logger.error("FATAL: ALLOWED_CHAT_IDS env var is not set. Refusing to start.");
   process.exit(1);
 }
 
 const PORT = process.env.PORT || 3847;
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 const WEBHOOK_URL = `https://${process.env.WEBHOOK_DOMAIN}/webhook`;
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
+const webhookSecret = process.env.WEBHOOK_SECRET;
 
 // Health check
 app.get("/", (_req, res) => {
@@ -27,7 +28,7 @@ app.get("/", (_req, res) => {
 
 // Telegram webhook endpoint
 app.post("/webhook", async (req, res) => {
-  if (!WEBHOOK_SECRET || req.headers["x-telegram-bot-api-secret-token"] !== WEBHOOK_SECRET) {
+  if (!webhookSecret || req.headers["x-telegram-bot-api-secret-token"] !== webhookSecret) {
     return res.sendStatus(401);
   }
   // Respond immediately so Telegram doesn't retry
@@ -36,7 +37,7 @@ app.post("/webhook", async (req, res) => {
   try {
     await handleUpdate(req.body);
   } catch (error) {
-    console.error("Webhook error:", error.message);
+    logger.error("Webhook error", { message: error.message, stack: error.stack });
   }
 });
 
@@ -53,19 +54,19 @@ async function setupWebhook() {
         url: WEBHOOK_URL,
         allowed_updates: ["message"],
         drop_pending_updates: true,
-        ...(WEBHOOK_SECRET && { secret_token: WEBHOOK_SECRET }),
+        ...(webhookSecret && { secret_token: webhookSecret }),
       }),
     });
 
     const data = await response.json();
 
     if (data.ok) {
-      console.log(`✅ Webhook set: ${WEBHOOK_URL}`);
+      logger.info("Webhook set", { url: WEBHOOK_URL });
     } else {
-      console.error("❌ Webhook setup failed:", data.description);
+      logger.error("Webhook setup failed", { description: data.description });
     }
   } catch (error) {
-    console.error("❌ Webhook setup error:", error.message);
+    logger.error("Webhook setup error", { message: error.message });
   }
 }
 
@@ -89,13 +90,7 @@ async function setBotCommands() {
 
 // Start server
 app.listen(PORT, async () => {
-  console.log(`
-  ╔══════════════════════════════════════╗
-  ║  🎯 JobRadar AI Bot                 ║
-  ║  Port: ${PORT}                          ║
-  ║  Webhook: ${WEBHOOK_URL.slice(0, 26)}...  ║
-  ╚══════════════════════════════════════╝
-  `);
+  logger.info("JobRadar AI Bot started", { port: PORT, webhook: WEBHOOK_URL });
 
   await setupWebhook();
   await setBotCommands();
@@ -103,7 +98,7 @@ app.listen(PORT, async () => {
 
 // Graceful shutdown
 process.on("SIGINT", async () => {
-  console.log("\n🛑 Shutting down...");
+  logger.info("Shutting down");
   await fetch(`${TELEGRAM_API}/deleteWebhook`).catch(() => {});
   process.exit(0);
 });

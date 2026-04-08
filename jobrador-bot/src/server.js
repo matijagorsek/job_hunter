@@ -7,8 +7,10 @@ const logger = require("./logger");
 const app = express();
 app.use(express.json());
 
-if (!process.env.ALLOWED_CHAT_IDS) {
-  logger.error("FATAL: ALLOWED_CHAT_IDS env var is not set. Refusing to start.");
+const REQUIRED_ENV_VARS = ["TELEGRAM_BOT_TOKEN", "ALLOWED_CHAT_IDS", "ANTHROPIC_API_KEY", "WEBHOOK_DOMAIN"];
+const missing = REQUIRED_ENV_VARS.filter((v) => !process.env[v]);
+if (missing.length > 0) {
+  logger.error(`FATAL: Missing required env vars: ${missing.join(", ")}. Refusing to start.`);
   process.exit(1);
 }
 

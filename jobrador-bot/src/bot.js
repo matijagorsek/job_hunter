@@ -1,6 +1,6 @@
 const { chat, profile, saveProfile } = require("./claude");
 const { searchJobs } = require("./agents/jobSearch");
-const { adviseCv } = require("./agents/cvAdvisor");
+const { adviseCv, analyzeCvDocument } = require("./agents/cvAdvisor");
 const { generateCoverLetter } = require("./agents/coverLetter");
 const { salaryIntel } = require("./agents/salary");
 const { detectLanguage, t } = require("./i18n");
@@ -170,7 +170,7 @@ async function handleDocument(chatId, userId, document, lang = "en") {
     return;
   }
 
-  const advice = await adviseCv(`Analyze this CV:\n\n${text}`);
+  const advice = await analyzeCvDocument(text);
   addToHistory(userId, "user", `Uploaded CV (${format.toUpperCase()}): ${document.file_name || "cv"}`);
   addToHistory(userId, "assistant", advice);
   await sendMessage(chatId, advice);
@@ -383,4 +383,4 @@ async function handleChat(chatId, userId, text) {
   }
 }
 
-module.exports = { handleUpdate, sendMessage };
+module.exports = { handleUpdate, sendMessage, splitMessage, parseFilters };

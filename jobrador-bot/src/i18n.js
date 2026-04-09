@@ -101,7 +101,7 @@ const messages = {
 
 // Detect Croatian by diacritics or common Croatian words
 const CROATIAN_PATTERN =
-  /[čćšđžČĆŠĐŽ]|\b(i|je|u|na|za|da|se|što|koji|koja|koje|ali|ili|ako|jer|kad|kao|već|sve|samo|imam|mogu|hoću|želim|hvala|dobar|dan|posao|posla|plaća)\b/i;
+  /[čćšđžČĆŠĐŽ]|\b(je|u|na|za|da|se|što|koji|koja|koje|ali|ili|ako|jer|kad|kao|već|sve|samo|imam|mogu|hoću|želim|hvala|posao|posla|plaća)\b/i;
 
 function detectLanguage(text) {
   return CROATIAN_PATTERN.test(text) ? "hr" : "en";

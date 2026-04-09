@@ -1,5 +1,6 @@
 require("dotenv").config();
 
+const crypto = require("crypto");
 const express = require("express");
 const { handleUpdate, sendMessage } = require("./bot");
 const { getReminderChats, getUserStats } = require("./stats");
@@ -9,7 +10,7 @@ const logger = require("./logger");
 const app = express();
 app.use(express.json());
 
-const REQUIRED_ENV_VARS = ["TELEGRAM_BOT_TOKEN", "ALLOWED_CHAT_IDS", "ANTHROPIC_API_KEY", "WEBHOOK_DOMAIN"];
+const REQUIRED_ENV_VARS = ["TELEGRAM_BOT_TOKEN", "ALLOWED_CHAT_IDS", "ANTHROPIC_API_KEY", "WEBHOOK_DOMAIN", "WEBHOOK_SECRET"];
 const missing = REQUIRED_ENV_VARS.filter((v) => !process.env[v]);
 if (missing.length > 0) {
   logger.error(`FATAL: Missing required env vars: ${missing.join(", ")}. Refusing to start.`);
@@ -32,7 +33,12 @@ app.get("/", (_req, res) => {
 
 // Telegram webhook endpoint
 app.post("/webhook", async (req, res) => {
-  if (!webhookSecret || req.headers["x-telegram-bot-api-secret-token"] !== webhookSecret) {
+  const incoming = req.headers["x-telegram-bot-api-secret-token"];
+  if (
+    !incoming ||
+    incoming.length !== webhookSecret.length ||
+    !crypto.timingSafeEqual(Buffer.from(incoming), Buffer.from(webhookSecret))
+  ) {
     return res.sendStatus(401);
   }
   // Respond immediately so Telegram doesn't retry

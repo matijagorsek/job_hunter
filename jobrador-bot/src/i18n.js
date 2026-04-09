@@ -25,6 +25,23 @@ const messages = {
     unknownField: (field) =>
       `Unknown field: \`${field}\`. Valid fields: title, location, skills, roles, salary`,
     unknownCommand: "Unknown command. Try /help to see what I can do.",
+    statsText: (s) =>
+      `📊 *Your Job Search Stats*\n\n` +
+      `🔍 Searches run: ${s.searches || 0}\n` +
+      `📄 CV reviews: ${s.cvChecks || 0}\n` +
+      `✉️ Cover letters: ${s.coverLetters || 0}\n` +
+      `💰 Salary checks: ${s.salaryChecks || 0}\n` +
+      ((s.recentSearches || []).length > 0
+        ? `\n*Recent searches:* ${s.recentSearches.join(", ")}`
+        : ""),
+    reminderEnabled: "🔔 Daily reminder enabled! I'll ping you at 9am CET each morning.",
+    reminderDisabled: "🔕 Daily reminder disabled.",
+    reminderUsage: "Usage: `/remind on` or `/remind off`",
+    dailyReminder: (recentSearch) =>
+      `👋 Good morning! Ready for today's job hunt?\n\n` +
+      (recentSearch ? `💡 Last search: _${recentSearch}_\n` : "") +
+      `Use /search to find new opportunities, or just chat!`,
+    searchTip: "💡 _Tip: Use /cv for profile tips or /cover to draft a cover letter._",
     helpText: (name) =>
       `🎯 *JobRadar AI* — Your Career Assistant\n\n` +
       `Hey ${name}! Here's what I can do:\n\n` +
@@ -75,6 +92,23 @@ const messages = {
     unknownField: (field) =>
       `Nepoznato polje: \`${field}\`. Valjana polja: title, location, skills, roles, salary`,
     unknownCommand: "Nepoznata naredba. Pokušaj /help da vidiš što mogu.",
+    statsText: (s) =>
+      `📊 *Tvoja statistika*\n\n` +
+      `🔍 Pretrage: ${s.searches || 0}\n` +
+      `📄 Pregledi životopisa: ${s.cvChecks || 0}\n` +
+      `✉️ Motivacijska pisma: ${s.coverLetters || 0}\n` +
+      `💰 Provjere plaće: ${s.salaryChecks || 0}\n` +
+      ((s.recentSearches || []).length > 0
+        ? `\n*Nedavne pretrage:* ${s.recentSearches.join(", ")}`
+        : ""),
+    reminderEnabled: "🔔 Dnevni podsjetnik uključen! Javit ću ti se u 9h CET.",
+    reminderDisabled: "🔕 Dnevni podsjetnik isključen.",
+    reminderUsage: "Koristi: `/remind on` ili `/remind off`",
+    dailyReminder: (recentSearch) =>
+      `👋 Dobro jutro! Spreman za danas?\n\n` +
+      (recentSearch ? `💡 Zadnja pretraga: _${recentSearch}_\n` : "") +
+      `Koristi /search za nove prilike, ili samo chataj!`,
+    searchTip: "💡 _Savjet: Koristi /cv za savjete o životopisu ili /cover za motivacijsko pismo._",
     helpText: (name) =>
       `🎯 *JobRadar AI* — Tvoj karijerski asistent\n\n` +
       `Hej ${name}! Evo što mogu:\n\n` +

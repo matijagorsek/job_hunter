@@ -4,6 +4,7 @@ const { adviseCv, analyzeCvDocument } = require("./agents/cvAdvisor");
 const { generateCoverLetter } = require("./agents/coverLetter");
 const { salaryIntel } = require("./agents/salary");
 const { detectLanguage, t } = require("./i18n");
+const { trackUsage, getUserStats, setReminder } = require("./stats");
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
 const logger = require("./logger");
@@ -253,7 +254,9 @@ async function handleCommand(chatId, userId, text, lang = "en") {
       const jobs = await searchJobs(searchQuery, filters);
       addToHistory(userId, "user", `Search for jobs: ${searchQuery || "general search"}`);
       addToHistory(userId, "assistant", jobs);
+      trackUsage(userId, "search", searchQuery || "general");
       await sendMessage(chatId, jobs);
+      await sendMessage(chatId, t(lang, "searchTip"));
       break;
     }
 
@@ -263,6 +266,7 @@ async function handleCommand(chatId, userId, text, lang = "en") {
       const cvAdvice = await adviseCv(rawArgs);
       addToHistory(userId, "user", `CV advice: ${rawArgs || "general review"}`);
       addToHistory(userId, "assistant", cvAdvice);
+      trackUsage(userId, "cv");
       await sendMessage(chatId, cvAdvice);
       break;
 
@@ -276,6 +280,7 @@ async function handleCommand(chatId, userId, text, lang = "en") {
       const letter = await generateCoverLetter(rawArgs);
       addToHistory(userId, "user", `Cover letter: ${rawArgs}`);
       addToHistory(userId, "assistant", letter);
+      trackUsage(userId, "cover");
       await sendMessage(chatId, letter);
       break;
 
@@ -294,6 +299,7 @@ async function handleCommand(chatId, userId, text, lang = "en") {
       const salaryLabel = [salaryFilters.role, salaryFilters.location, salaryQuery].filter(Boolean).join(", ") || "general";
       addToHistory(userId, "user", `Salary info: ${salaryLabel}`);
       addToHistory(userId, "assistant", salary);
+      trackUsage(userId, "salary");
       await sendMessage(chatId, salary);
       break;
     }
@@ -357,6 +363,26 @@ async function handleCommand(chatId, userId, text, lang = "en") {
           `*Type:* Full remote, ${profile.preferences.contractType.join(" or ")}\n\n` +
           `_Use /profile set <field> <value> to update_`,
       );
+      break;
+    }
+
+    case "/stats": {
+      const userStat = getUserStats(userId);
+      await sendMessage(chatId, t(lang, "statsText", userStat));
+      break;
+    }
+
+    case "/remind": {
+      const subCmd = args[0]?.toLowerCase();
+      if (subCmd === "on") {
+        setReminder(chatId, userId, true);
+        await sendMessage(chatId, t(lang, "reminderEnabled"));
+      } else if (subCmd === "off") {
+        setReminder(chatId, userId, false);
+        await sendMessage(chatId, t(lang, "reminderDisabled"));
+      } else {
+        await sendMessage(chatId, t(lang, "reminderUsage"));
+      }
       break;
     }
 

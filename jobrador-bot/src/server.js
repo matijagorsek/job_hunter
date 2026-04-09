@@ -1,7 +1,9 @@
 require("dotenv").config();
 
 const express = require("express");
-const { handleUpdate } = require("./bot");
+const { handleUpdate, sendMessage } = require("./bot");
+const { getReminderChats, getUserStats } = require("./stats");
+const { t } = require("./i18n");
 const logger = require("./logger");
 
 const app = express();
@@ -84,28 +86,59 @@ async function setBotCommands() {
         { command: "cover", description: "✉️ Generate cover letter" },
         { command: "salary", description: "💰 Salary market insights" },
         { command: "profile", description: "👤 View your profile" },
+        { command: "stats", description: "📊 Your job search statistics" },
+        { command: "remind", description: "🔔 Toggle daily job search reminder" },
         { command: "help", description: "❓ Show all commands" },
       ],
     }),
   }).catch(() => {});
 }
 
-// Start server
-app.listen(PORT, async () => {
-  logger.info("JobRadar AI Bot started", { port: PORT, webhook: WEBHOOK_URL });
+function scheduleReminders() {
+  function msUntilNextUTCHour(hour) {
+    const now = new Date();
+    const target = new Date(now);
+    target.setUTCHours(hour, 0, 0, 0);
+    if (target <= now) target.setUTCDate(target.getUTCDate() + 1);
+    return target.getTime() - now.getTime();
+  }
 
-  await setupWebhook();
-  await setBotCommands();
-});
+  async function sendReminders() {
+    const reminders = getReminderChats();
+    for (const { chatId, userId } of reminders) {
+      const stat = getUserStats(userId);
+      const recentSearch = (stat.recentSearches || [])[0] || null;
+      await sendMessage(chatId, t("en", "dailyReminder", recentSearch)).catch(() => {});
+    }
+    setTimeout(sendReminders, 24 * 60 * 60 * 1000);
+  }
 
-// Graceful shutdown
-process.on("SIGINT", async () => {
-  logger.info("Shutting down");
-  await fetch(`${TELEGRAM_API}/deleteWebhook`).catch(() => {});
-  process.exit(0);
-});
+  // 9am CET = 8am UTC
+  setTimeout(sendReminders, msUntilNextUTCHour(8));
+  logger.info("Daily reminder scheduler initialized");
+}
 
-process.on("SIGTERM", async () => {
-  await fetch(`${TELEGRAM_API}/deleteWebhook`).catch(() => {});
-  process.exit(0);
-});
+if (require.main === module) {
+  // Start server
+  app.listen(PORT, async () => {
+    logger.info("JobRadar AI Bot started", { port: PORT, webhook: WEBHOOK_URL });
+
+    await setupWebhook();
+    await setBotCommands();
+    scheduleReminders();
+  });
+
+  // Graceful shutdown
+  process.on("SIGINT", async () => {
+    logger.info("Shutting down");
+    await fetch(`${TELEGRAM_API}/deleteWebhook`).catch(() => {});
+    process.exit(0);
+  });
+
+  process.on("SIGTERM", async () => {
+    await fetch(`${TELEGRAM_API}/deleteWebhook`).catch(() => {});
+    process.exit(0);
+  });
+}
+
+module.exports = { app };

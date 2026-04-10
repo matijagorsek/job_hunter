@@ -1,20 +1,26 @@
 require("dotenv").config();
 
+const crypto = require("crypto");
 const express = require("express");
-const { handleUpdate } = require("./bot");
+const { handleUpdate, sendMessage } = require("./bot");
+const { getReminderChats, getUserStats } = require("./stats");
+const { t } = require("./i18n");
+const logger = require("./logger");
 
 const app = express();
 app.use(express.json());
 
-if (!process.env.ALLOWED_CHAT_IDS) {
-  console.error("FATAL: ALLOWED_CHAT_IDS env var is not set. Refusing to start.");
+const REQUIRED_ENV_VARS = ["TELEGRAM_BOT_TOKEN", "ALLOWED_CHAT_IDS", "ANTHROPIC_API_KEY", "WEBHOOK_DOMAIN", "WEBHOOK_SECRET"];
+const missing = REQUIRED_ENV_VARS.filter((v) => !process.env[v]);
+if (missing.length > 0) {
+  logger.error(`FATAL: Missing required env vars: ${missing.join(", ")}. Refusing to start.`);
   process.exit(1);
 }
 
 const PORT = process.env.PORT || 3847;
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 const WEBHOOK_URL = `https://${process.env.WEBHOOK_DOMAIN}/webhook`;
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
+const webhookSecret = process.env.WEBHOOK_SECRET;
 
 // Health check
 app.get("/", (_req, res) => {
@@ -27,7 +33,12 @@ app.get("/", (_req, res) => {
 
 // Telegram webhook endpoint
 app.post("/webhook", async (req, res) => {
-  if (!WEBHOOK_SECRET || req.headers["x-telegram-bot-api-secret-token"] !== WEBHOOK_SECRET) {
+  const incoming = req.headers["x-telegram-bot-api-secret-token"];
+  if (
+    !incoming ||
+    incoming.length !== webhookSecret.length ||
+    !crypto.timingSafeEqual(Buffer.from(incoming), Buffer.from(webhookSecret))
+  ) {
     return res.sendStatus(401);
   }
   // Respond immediately so Telegram doesn't retry
@@ -36,7 +47,7 @@ app.post("/webhook", async (req, res) => {
   try {
     await handleUpdate(req.body);
   } catch (error) {
-    console.error("Webhook error:", error.message);
+    logger.error("Webhook error", { message: error.message, stack: error.stack });
   }
 });
 
@@ -53,19 +64,19 @@ async function setupWebhook() {
         url: WEBHOOK_URL,
         allowed_updates: ["message"],
         drop_pending_updates: true,
-        ...(WEBHOOK_SECRET && { secret_token: WEBHOOK_SECRET }),
+        ...(webhookSecret && { secret_token: webhookSecret }),
       }),
     });
 
     const data = await response.json();
 
     if (data.ok) {
-      console.log(`✅ Webhook set: ${WEBHOOK_URL}`);
+      logger.info("Webhook set", { url: WEBHOOK_URL });
     } else {
-      console.error("❌ Webhook setup failed:", data.description);
+      logger.error("Webhook setup failed", { description: data.description });
     }
   } catch (error) {
-    console.error("❌ Webhook setup error:", error.message);
+    logger.error("Webhook setup error", { message: error.message });
   }
 }
 
@@ -81,34 +92,70 @@ async function setBotCommands() {
         { command: "cover", description: "✉️ Generate cover letter" },
         { command: "salary", description: "💰 Salary market insights" },
         { command: "profile", description: "👤 View your profile" },
+        { command: "stats", description: "📊 Your job search statistics" },
+        { command: "remind", description: "🔔 Toggle daily job search reminder" },
         { command: "help", description: "❓ Show all commands" },
       ],
     }),
   }).catch(() => {});
 }
 
-// Start server
-app.listen(PORT, async () => {
-  console.log(`
-  ╔══════════════════════════════════════╗
-  ║  🎯 JobRadar AI Bot                 ║
-  ║  Port: ${PORT}                          ║
-  ║  Webhook: ${WEBHOOK_URL.slice(0, 26)}...  ║
-  ╚══════════════════════════════════════╝
-  `);
+function scheduleReminders() {
+  function msUntilNextUTCHour(hour) {
+    const now = new Date();
+    const target = new Date(now);
+    target.setUTCHours(hour, 0, 0, 0);
+    if (target <= now) target.setUTCDate(target.getUTCDate() + 1);
+    return target.getTime() - now.getTime();
+  }
 
-  await setupWebhook();
-  await setBotCommands();
-});
+  async function sendReminders() {
+    const reminders = getReminderChats();
+    for (const { chatId, userId } of reminders) {
+      const stat = getUserStats(userId);
+      const recentSearch = (stat.recentSearches || [])[0] || null;
+      await sendMessage(chatId, t("en", "dailyReminder", recentSearch)).catch(() => {});
+    }
+    setTimeout(sendReminders, 24 * 60 * 60 * 1000);
+  }
 
-// Graceful shutdown
-process.on("SIGINT", async () => {
-  console.log("\n🛑 Shutting down...");
-  await fetch(`${TELEGRAM_API}/deleteWebhook`).catch(() => {});
-  process.exit(0);
-});
+  // 9am CET = 8am UTC
+  setTimeout(sendReminders, msUntilNextUTCHour(8));
+  logger.info("Daily reminder scheduler initialized");
+}
 
-process.on("SIGTERM", async () => {
-  await fetch(`${TELEGRAM_API}/deleteWebhook`).catch(() => {});
-  process.exit(0);
-});
+if (require.main === module) {
+  // Start server
+  app.listen(PORT, async () => {
+    logger.info("JobRadar AI Bot started", { port: PORT, webhook: WEBHOOK_URL });
+
+    await setupWebhook();
+    await setBotCommands();
+    scheduleReminders();
+  });
+
+  // Global error handlers for clean PM2 restarts
+  process.on("uncaughtException", (err) => {
+    logger.error("Uncaught exception", { message: err.message, stack: err.stack });
+    process.exit(1);
+  });
+
+  process.on("unhandledRejection", (reason) => {
+    logger.error("Unhandled rejection", { reason: reason instanceof Error ? { message: reason.message, stack: reason.stack } : reason });
+    process.exit(1);
+  });
+
+  // Graceful shutdown
+  process.on("SIGINT", async () => {
+    logger.info("Shutting down");
+    await fetch(`${TELEGRAM_API}/deleteWebhook`).catch(() => {});
+    process.exit(0);
+  });
+
+  process.on("SIGTERM", async () => {
+    await fetch(`${TELEGRAM_API}/deleteWebhook`).catch(() => {});
+    process.exit(0);
+  });
+}
+
+module.exports = { app };

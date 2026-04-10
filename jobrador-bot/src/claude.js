@@ -2,13 +2,14 @@ const Anthropic = require("@anthropic-ai/sdk");
 const fs = require("fs");
 const path = require("path");
 
-const profile = JSON.parse(
-  fs.readFileSync(path.join(__dirname, "../data/profile.json"), "utf-8")
-);
+const PROFILE_PATH = path.join(__dirname, "../data/profile.json");
+
+const profile = JSON.parse(fs.readFileSync(PROFILE_PATH, "utf-8"));
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-const SYSTEM_PROMPT = `You are JobRadar, an AI career assistant for ${profile.name}.
+function getSystemPrompt() {
+  return `You are JobRadar, an AI career assistant for ${profile.name}.
 
 ## Who You're Helping
 - ${profile.title}, ${profile.yearsExperience}+ years experience
@@ -36,7 +37,7 @@ You can help with:
 5. **General Career Chat** — Answer career questions, interview prep, negotiation tips.
 
 ## Response Style
-- Respond in the same language the user writes in (Croatian or English)
+- Respond in the same language the user writes in
 - Be direct and practical — no fluff
 - Use Telegram-friendly formatting: *bold*, _italic_, \`code\`
 - Keep responses concise for mobile reading
@@ -49,12 +50,17 @@ You can help with:
 - The combination of 12+ years Android + MCP/AI workflow expertise is a rare differentiator — leverage it
 - When suggesting roles, include both pure Android roles AND emerging AI-adjacent roles
 - Be honest about market conditions and salary expectations for European remote workers`;
+}
+
+function saveProfile() {
+  fs.writeFileSync(PROFILE_PATH, JSON.stringify(profile, null, 2), "utf-8");
+}
 
 async function chat(conversationHistory) {
   const response = await client.messages.create({
     model: "claude-sonnet-4-20250514",
     max_tokens: 2048,
-    system: SYSTEM_PROMPT,
+    system: getSystemPrompt(),
     messages: conversationHistory,
   });
 
@@ -73,4 +79,4 @@ async function runAgent(agentPrompt, userMessage) {
   ]);
 }
 
-module.exports = { chat, runAgent, profile };
+module.exports = { chat, runAgent, profile, saveProfile };

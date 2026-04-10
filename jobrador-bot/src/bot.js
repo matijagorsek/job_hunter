@@ -1,10 +1,13 @@
-const { chat, profile } = require("./claude");
+const { chat, profile, saveProfile } = require("./claude");
 const { searchJobs } = require("./agents/jobSearch");
-const { adviseCv } = require("./agents/cvAdvisor");
+const { adviseCv, analyzeCvDocument } = require("./agents/cvAdvisor");
 const { generateCoverLetter } = require("./agents/coverLetter");
 const { salaryIntel } = require("./agents/salary");
+const { detectLanguage, t } = require("./i18n");
+const { trackUsage, getUserStats, setReminder } = require("./stats");
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
+const logger = require("./logger");
 
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 
@@ -15,6 +18,28 @@ const ALLOWED_CHAT_IDS = process.env.ALLOWED_CHAT_IDS
 // Per-user conversation history (in-memory, resets on restart)
 const conversations = new Map();
 const MAX_HISTORY = 20; // keep last 20 messages per user
+
+// Per-user language preference (detected from messages)
+const userLanguages = new Map();
+
+// Rate limiting: max 5 requests per 60 seconds per user
+const rateLimitMap = new Map();
+const RATE_LIMIT_MAX = 5;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+
+function isRateLimited(userId) {
+  const now = Date.now();
+  const timestamps = (rateLimitMap.get(userId) || []).filter(
+    (t) => now - t < RATE_LIMIT_WINDOW_MS,
+  );
+  if (timestamps.length >= RATE_LIMIT_MAX) {
+    rateLimitMap.set(userId, timestamps);
+    return true;
+  }
+  timestamps.push(now);
+  rateLimitMap.set(userId, timestamps);
+  return false;
+}
 
 function getHistory(userId) {
   if (!conversations.has(userId)) {
@@ -128,25 +153,25 @@ async function extractTextFromBuffer(buffer, format) {
   return null;
 }
 
-async function handleDocument(chatId, userId, document) {
+async function handleDocument(chatId, userId, document, lang = "en") {
   const format = SUPPORTED_CV_MIME_TYPES[document.mime_type];
   if (!format) {
-    await sendMessage(chatId, "Unsupported file format. Please send a PDF or DOCX file.");
+    await sendMessage(chatId, t(lang, "unsupportedFile"));
     return;
   }
 
-  await sendMessage(chatId, `📄 Processing your CV (${format.toUpperCase()})...`);
+  await sendMessage(chatId, t(lang, "processingCv", format.toUpperCase()));
   await sendTyping(chatId);
 
   const buffer = await downloadTelegramFile(document.file_id);
   const text = await extractTextFromBuffer(buffer, format);
 
   if (!text || text.trim().length < 50) {
-    await sendMessage(chatId, "Could not extract text from the file. Please ensure it contains readable text.");
+    await sendMessage(chatId, t(lang, "cvExtractError"));
     return;
   }
 
-  const advice = await adviseCv(`Analyze this CV:\n\n${text}`);
+  const advice = await analyzeCvDocument(text);
   addToHistory(userId, "user", `Uploaded CV (${format.toUpperCase()}): ${document.file_name || "cv"}`);
   addToHistory(userId, "assistant", advice);
   await sendMessage(chatId, advice);
@@ -158,27 +183,46 @@ async function handleUpdate(update) {
 
   const chatId = message.chat.id;
   if (!ALLOWED_CHAT_IDS.includes(chatId)) {
-    await sendMessage(chatId, "Unauthorised");
+    await sendMessage(chatId, t("en", "unauthorized"));
     return;
   }
   const userId = message.from.id;
+
+  // Detect and persist user language from text messages
+  if (message.text && !message.text.startsWith("/")) {
+    userLanguages.set(userId, detectLanguage(message.text));
+  }
+  const lang = userLanguages.get(userId) || "en";
+
+  if (isRateLimited(userId)) {
+    await sendMessage(chatId, t(lang, "rateLimit"));
+    return;
+  }
 
   await sendTyping(chatId);
 
   try {
     if (message.document) {
-      await handleDocument(chatId, userId, message.document);
+      await handleDocument(chatId, userId, message.document, lang);
     } else if (message.text) {
       const text = message.text.trim();
       if (text.startsWith("/")) {
-        await handleCommand(chatId, userId, text);
+        await handleCommand(chatId, userId, text, lang);
       } else {
         await handleChat(chatId, userId, text);
       }
     }
   } catch (error) {
-    console.error("Error handling message:", error);
-    await sendMessage(chatId, "⚠️ Something went wrong. Try again in a moment.");
+    logger.error("Error handling message", { userId, chatId, message: error.message, stack: error.stack });
+    let userMessage = t(lang, "errorGeneric");
+    if (error?.status === 429 || error?.message?.toLowerCase().includes("rate limit")) {
+      userMessage = t(lang, "errorAiBusy");
+    } else if (error?.code === "ECONNRESET" || error?.message?.toLowerCase().includes("timeout")) {
+      userMessage = t(lang, "errorTimeout");
+    } else if (error?.status >= 500) {
+      userMessage = t(lang, "errorUnavailable");
+    }
+    await sendMessage(chatId, userMessage);
   }
 }
 
@@ -193,81 +237,115 @@ function parseFilters(input) {
   return { query, filters };
 }
 
-async function handleCommand(chatId, userId, text) {
+async function handleCommand(chatId, userId, text, lang = "en") {
   const [command, ...args] = text.split(" ");
   const rawArgs = args.join(" ");
 
   switch (command.toLowerCase().replace(/@\w+/, "")) {
     case "/start":
     case "/help":
-      await sendMessage(
-        chatId,
-        `🎯 *JobRadar AI* — Your Career Assistant\n\n` +
-          `Hey ${profile.name}! Here's what I can do:\n\n` +
-          `🔍 /search — Find remote jobs for your profile\n` +
-          `🔍 /search _keywords_ — Search with specific terms\n` +
-          `🔍 /search --location europe --type fulltime --industry fintech\n` +
-          `📄 /cv — Get CV improvement advice\n` +
-          `📎 Send a PDF or DOCX file to analyze that CV\n` +
-          `✉️ /cover — Generate a cover letter\n` +
-          `💰 /salary — Salary market insights\n` +
-          `👤 /profile — View your profile summary\n\n` +
-          `Or just chat naturally! I understand context.\n\n` +
-          `_Examples:_\n` +
-          `• "Find Android jobs paying over $150k"\n` +
-          `• "Write a cover letter for Spotify"\n` +
-          `• "Is my CV good for FAANG?"\n` +
-          `• "What should I charge as a contractor?"`,
-      );
+      await sendMessage(chatId, t(lang, "helpText", profile.name));
       break;
 
     case "/search": {
       const { query: searchQuery, filters } = parseFilters(rawArgs);
-      await sendMessage(chatId, "🔍 Scanning job boards...");
+      await sendMessage(chatId, t(lang, "scanningJobs"));
       await sendTyping(chatId);
       const jobs = await searchJobs(searchQuery, filters);
       addToHistory(userId, "user", `Search for jobs: ${searchQuery || "general search"}`);
       addToHistory(userId, "assistant", jobs);
+      trackUsage(userId, "search", searchQuery || "general");
       await sendMessage(chatId, jobs);
+      await sendMessage(chatId, t(lang, "searchTip"));
       break;
     }
 
     case "/cv":
-      await sendMessage(chatId, "📄 Analyzing your CV...");
+      await sendMessage(chatId, t(lang, "analyzingCv"));
       await sendTyping(chatId);
       const cvAdvice = await adviseCv(rawArgs);
       addToHistory(userId, "user", `CV advice: ${rawArgs || "general review"}`);
       addToHistory(userId, "assistant", cvAdvice);
+      trackUsage(userId, "cv");
       await sendMessage(chatId, cvAdvice);
       break;
 
     case "/cover":
       if (!rawArgs) {
-        await sendMessage(
-          chatId,
-          "✉️ Tell me the role! Example:\n`/cover Staff Android Engineer at Spotify`",
-        );
+        await sendMessage(chatId, t(lang, "coverLetterPrompt"));
         return;
       }
-      await sendMessage(chatId, "✉️ Writing your cover letter...");
+      await sendMessage(chatId, t(lang, "writingCoverLetter"));
       await sendTyping(chatId);
       const letter = await generateCoverLetter(rawArgs);
       addToHistory(userId, "user", `Cover letter: ${rawArgs}`);
       addToHistory(userId, "assistant", letter);
+      trackUsage(userId, "cover");
       await sendMessage(chatId, letter);
       break;
 
-    case "/salary":
-      await sendMessage(chatId, "💰 Researching market rates...");
+    case "/salary": {
+      const salaryFilterPattern = /--?(location|role)\s+([^\s-][^\s]*(?:\s+[^\s-][^\s]*)*?)(?=\s+--|$)/gi;
+      let salaryMatch;
+      const salaryFilters = {};
+      let salaryFilterInput = rawArgs;
+      while ((salaryMatch = salaryFilterPattern.exec(rawArgs)) !== null) {
+        salaryFilters[salaryMatch[1].toLowerCase()] = salaryMatch[2].trim();
+      }
+      const salaryQuery = salaryFilterInput.replace(/--?(location|role)\s+\S+/gi, "").trim();
+      await sendMessage(chatId, t(lang, "researchingRates"));
       await sendTyping(chatId);
-      const salary = await salaryIntel(rawArgs);
-      addToHistory(userId, "user", `Salary info: ${rawArgs || "general"}`);
+      const salary = await salaryIntel(salaryQuery || null, salaryFilters.location, salaryFilters.role);
+      const salaryLabel = [salaryFilters.role, salaryFilters.location, salaryQuery].filter(Boolean).join(", ") || "general";
+      addToHistory(userId, "user", `Salary info: ${salaryLabel}`);
       addToHistory(userId, "assistant", salary);
+      trackUsage(userId, "salary");
       await sendMessage(chatId, salary);
       break;
+    }
 
-    case "/profile":
-      const skills = [
+    case "/profile": {
+      const subCmd = args[0];
+      if (subCmd === "set") {
+        const field = args[1];
+        const value = args.slice(2).join(" ").trim();
+        if (!field || !value) {
+          await sendMessage(chatId, t(lang, "profileUsage"));
+          break;
+        }
+        switch (field.toLowerCase()) {
+          case "title":
+            profile.title = value;
+            break;
+          case "location":
+            profile.location = value;
+            break;
+          case "skills":
+            profile.skills.primary = value.split(",").map((s) => s.trim()).filter(Boolean);
+            break;
+          case "roles":
+            profile.preferredRoles = value.split(",").map((s) => s.trim()).filter(Boolean);
+            break;
+          case "salary": {
+            const parts = value.split("-").map((s) => parseInt(s.trim(), 10));
+            if (parts.length !== 2 || isNaN(parts[0]) || isNaN(parts[1])) {
+              await sendMessage(chatId, t(lang, "invalidSalary"));
+              break;
+            }
+            profile.preferences.salaryRange.min = parts[0];
+            profile.preferences.salaryRange.max = parts[1];
+            break;
+          }
+          default:
+            await sendMessage(chatId, t(lang, "unknownField", field));
+            break;
+        }
+        saveProfile();
+        await sendMessage(chatId, t(lang, "profileUpdated", field));
+        break;
+      }
+
+      const profileSkills = [
         ...profile.skills.primary,
         ...profile.skills.ai.slice(0, 3),
       ];
@@ -279,15 +357,37 @@ async function handleCommand(chatId, userId, text) {
           `📍 ${profile.location}\n` +
           `💼 ${profile.yearsExperience}+ years experience\n` +
           `🏢 Currently: ${profile.currentRole.title} @ ${profile.currentRole.company}\n\n` +
-          `*Key Skills:* ${skills.join(", ")}\n\n` +
+          `*Key Skills:* ${profileSkills.join(", ")}\n\n` +
           `*Looking for:* ${profile.preferredRoles.slice(0, 4).join(", ")}\n` +
           `*Salary:* $${profile.preferences.salaryRange.min / 1000}k-$${profile.preferences.salaryRange.max / 1000}k\n` +
-          `*Type:* Full remote, ${profile.preferences.contractType.join(" or ")}`,
+          `*Type:* Full remote, ${profile.preferences.contractType.join(" or ")}\n\n` +
+          `_Use /profile set <field> <value> to update_`,
       );
       break;
+    }
+
+    case "/stats": {
+      const userStat = getUserStats(userId);
+      await sendMessage(chatId, t(lang, "statsText", userStat));
+      break;
+    }
+
+    case "/remind": {
+      const subCmd = args[0]?.toLowerCase();
+      if (subCmd === "on") {
+        setReminder(chatId, userId, true);
+        await sendMessage(chatId, t(lang, "reminderEnabled"));
+      } else if (subCmd === "off") {
+        setReminder(chatId, userId, false);
+        await sendMessage(chatId, t(lang, "reminderDisabled"));
+      } else {
+        await sendMessage(chatId, t(lang, "reminderUsage"));
+      }
+      break;
+    }
 
     default:
-      await sendMessage(chatId, "Unknown command. Try /help to see what I can do.");
+      await sendMessage(chatId, t(lang, "unknownCommand"));
   }
 }
 
@@ -309,4 +409,4 @@ async function handleChat(chatId, userId, text) {
   }
 }
 
-module.exports = { handleUpdate, sendMessage };
+module.exports = { handleUpdate, sendMessage, splitMessage, parseFilters };

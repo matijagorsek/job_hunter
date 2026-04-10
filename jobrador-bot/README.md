@@ -123,16 +123,22 @@ Just type naturally! The bot understands context:
 ```
 jobrador-bot/
 ├── src/
-│   ├── server.js          # Express + webhook handler
-│   ├── bot.js             # Telegram bot logic
-│   ├── claude.js          # Claude API client
-│   ├── agents/
-│   │   ├── jobSearch.js   # Job search agent
-│   │   ├── cvAdvisor.js   # CV analysis & tips
-│   │   ├── coverLetter.js # Cover letter generator
-│   │   └── salary.js      # Salary intelligence
-│   ├── profile.js         # User profile manager
-│   └── utils.js           # Helpers
+│   ├── server.js          # Express + webhook handler + startup validation
+│   ├── bot.js             # Telegram message handling, command routing, rate limiting
+│   ├── claude.js          # Claude API client + system prompt
+│   ├── i18n.js            # English / Croatian translations
+│   ├── logger.js          # Winston structured logging
+│   └── agents/
+│       ├── jobSearch.js   # Job search agent
+│       ├── cvAdvisor.js   # CV analysis & tips
+│       ├── coverLetter.js # Cover letter generator
+│       └── salary.js      # Salary intelligence
+├── tests/
+│   ├── unit/
+│   │   ├── bot.test.js    # splitMessage, parseFilters, handleUpdate
+│   │   └── i18n.test.js   # detectLanguage, t()
+│   └── integration/
+│       └── webhook.test.js # HTTP webhook auth + health check
 ├── data/
 │   └── profile.json       # Your profile data
 ├── launchd/               # macOS auto-start configs
@@ -140,3 +146,31 @@ jobrador-bot/
 ├── package.json
 └── README.md
 ```
+
+## Development & Testing
+
+### Running tests
+
+```bash
+npm test
+```
+
+Tests use [Jest](https://jestjs.io/) for unit tests and [supertest](https://github.com/ladjs/supertest) for HTTP integration tests. All external services (Telegram API, Claude API) are mocked — no real credentials are needed to run the suite.
+
+### Test layout
+
+| File | What it covers |
+|------|---------------|
+| `tests/unit/i18n.test.js` | Language detection, translation lookups, function messages |
+| `tests/unit/bot.test.js` | Message splitting, filter parsing, auth enforcement, rate limiting |
+| `tests/integration/webhook.test.js` | Webhook 401/200 responses, `handleUpdate` dispatch |
+
+### Key modules for contributors
+
+| Module | Responsibility |
+|--------|---------------|
+| `src/server.js` | Fail-fast env-var validation, Express setup, webhook registration |
+| `src/bot.js` | Chat ID allowlist, rate limiting, command routing, document handling |
+| `src/claude.js` | Claude API client; `chat()` for conversation, `runAgent()` for one-shot agents |
+| `src/agents/*.js` | Each agent owns its own system-prompt fragment and calls `runAgent()` |
+| `src/i18n.js` | All user-facing strings; add keys here when adding new messages |

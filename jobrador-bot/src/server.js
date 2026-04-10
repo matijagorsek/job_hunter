@@ -134,6 +134,17 @@ if (require.main === module) {
     scheduleReminders();
   });
 
+  // Global error handlers for clean PM2 restarts
+  process.on("uncaughtException", (err) => {
+    logger.error("Uncaught exception", { message: err.message, stack: err.stack });
+    process.exit(1);
+  });
+
+  process.on("unhandledRejection", (reason) => {
+    logger.error("Unhandled rejection", { reason: reason instanceof Error ? { message: reason.message, stack: reason.stack } : reason });
+    process.exit(1);
+  });
+
   // Graceful shutdown
   process.on("SIGINT", async () => {
     logger.info("Shutting down");

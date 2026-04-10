@@ -10,17 +10,15 @@ const logger = require("./logger");
 const app = express();
 app.use(express.json());
 
-const REQUIRED_ENV_VARS = ["TELEGRAM_BOT_TOKEN", "ALLOWED_CHAT_IDS", "ANTHROPIC_API_KEY", "WEBHOOK_DOMAIN", "WEBHOOK_SECRET"];
-const missing = REQUIRED_ENV_VARS.filter((v) => !process.env[v]);
-if (missing.length > 0) {
-  logger.error(`FATAL: Missing required env vars: ${missing.join(", ")}. Refusing to start.`);
+if (!process.env.ALLOWED_CHAT_IDS) {
+  console.error("FATAL: ALLOWED_CHAT_IDS env var is not set. Refusing to start.");
   process.exit(1);
 }
 
 const PORT = process.env.PORT || 3847;
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 const WEBHOOK_URL = `https://${process.env.WEBHOOK_DOMAIN}/webhook`;
-const webhookSecret = process.env.WEBHOOK_SECRET;
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 
 // Health check
 app.get("/", (_req, res) => {
@@ -33,12 +31,7 @@ app.get("/", (_req, res) => {
 
 // Telegram webhook endpoint
 app.post("/webhook", async (req, res) => {
-  const incoming = req.headers["x-telegram-bot-api-secret-token"];
-  if (
-    !incoming ||
-    incoming.length !== webhookSecret.length ||
-    !crypto.timingSafeEqual(Buffer.from(incoming), Buffer.from(webhookSecret))
-  ) {
+  if (!WEBHOOK_SECRET || req.headers["x-telegram-bot-api-secret-token"] !== WEBHOOK_SECRET) {
     return res.sendStatus(401);
   }
   // Respond immediately so Telegram doesn't retry
@@ -64,7 +57,7 @@ async function setupWebhook() {
         url: WEBHOOK_URL,
         allowed_updates: ["message"],
         drop_pending_updates: true,
-        ...(webhookSecret && { secret_token: webhookSecret }),
+        ...(WEBHOOK_SECRET && { secret_token: WEBHOOK_SECRET }),
       }),
     });
 

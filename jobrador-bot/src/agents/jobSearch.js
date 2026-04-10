@@ -56,6 +56,8 @@ Compute a weighted match % from these five dimensions. Show the breakdown.
 Present 4-5 jobs sorted by match % descending. Mix company sizes (startup, mid-size, enterprise) and role types (pure Android + AI-adjacent).`;
 }
 
+If the user specifies keywords, focus on those. Otherwise, search broadly across Android, Mobile, and AI-adjacent roles.`;
+
 async function searchJobs(query, filters = {}) {
   let userMsg = query
     ? `Search for remote jobs matching: "${query}"`
@@ -70,7 +72,7 @@ async function searchJobs(query, filters = {}) {
     userMsg += `\n\nFilters to apply:\n${constraints.map((c) => `- ${c}`).join("\n")}`;
   }
 
-  return runAgent(buildAgentPrompt(), userMsg);
+  return runAgent(AGENT_PROMPT, userMsg);
 }
 
 module.exports = { searchJobs };

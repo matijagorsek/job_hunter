@@ -3,11 +3,8 @@ const { searchJobs } = require("./agents/jobSearch");
 const { adviseCv, analyzeCvDocument } = require("./agents/cvAdvisor");
 const { generateCoverLetter } = require("./agents/coverLetter");
 const { salaryIntel } = require("./agents/salary");
-const { detectLanguage, t } = require("./i18n");
-const { trackUsage, getUserStats, setReminder } = require("./stats");
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
-const logger = require("./logger");
 
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 
@@ -18,9 +15,6 @@ const ALLOWED_CHAT_IDS = process.env.ALLOWED_CHAT_IDS
 // Per-user conversation history (in-memory, resets on restart)
 const conversations = new Map();
 const MAX_HISTORY = 20; // keep last 20 messages per user
-
-// Per-user language preference (detected from messages)
-const userLanguages = new Map();
 
 // Rate limiting: max 5 requests per 60 seconds per user
 const rateLimitMap = new Map();
@@ -153,25 +147,25 @@ async function extractTextFromBuffer(buffer, format) {
   return null;
 }
 
-async function handleDocument(chatId, userId, document, lang = "en") {
+async function handleDocument(chatId, userId, document) {
   const format = SUPPORTED_CV_MIME_TYPES[document.mime_type];
   if (!format) {
-    await sendMessage(chatId, t(lang, "unsupportedFile"));
+    await sendMessage(chatId, "Unsupported file format. Please send a PDF or DOCX file.");
     return;
   }
 
-  await sendMessage(chatId, t(lang, "processingCv", format.toUpperCase()));
+  await sendMessage(chatId, `📄 Processing your CV (${format.toUpperCase()})...`);
   await sendTyping(chatId);
 
   const buffer = await downloadTelegramFile(document.file_id);
   const text = await extractTextFromBuffer(buffer, format);
 
   if (!text || text.trim().length < 50) {
-    await sendMessage(chatId, t(lang, "cvExtractError"));
+    await sendMessage(chatId, "Could not extract text from the file. Please ensure it contains readable text.");
     return;
   }
 
-  const advice = await analyzeCvDocument(text);
+  const advice = await adviseCv(`Analyze this CV:\n\n${text}`);
   addToHistory(userId, "user", `Uploaded CV (${format.toUpperCase()}): ${document.file_name || "cv"}`);
   addToHistory(userId, "assistant", advice);
   await sendMessage(chatId, advice);
@@ -183,19 +177,16 @@ async function handleUpdate(update) {
 
   const chatId = message.chat.id;
   if (!ALLOWED_CHAT_IDS.includes(chatId)) {
-    await sendMessage(chatId, t("en", "unauthorized"));
+    await sendMessage(chatId, "Unauthorised");
     return;
   }
   const userId = message.from.id;
 
-  // Detect and persist user language from text messages
-  if (message.text && !message.text.startsWith("/")) {
-    userLanguages.set(userId, detectLanguage(message.text));
-  }
-  const lang = userLanguages.get(userId) || "en";
-
   if (isRateLimited(userId)) {
-    await sendMessage(chatId, t(lang, "rateLimit"));
+    await sendMessage(
+      chatId,
+      `⏳ You're sending too many requests. Please wait a moment before trying again.`,
+    );
     return;
   }
 
@@ -203,24 +194,24 @@ async function handleUpdate(update) {
 
   try {
     if (message.document) {
-      await handleDocument(chatId, userId, message.document, lang);
+      await handleDocument(chatId, userId, message.document);
     } else if (message.text) {
       const text = message.text.trim();
       if (text.startsWith("/")) {
-        await handleCommand(chatId, userId, text, lang);
+        await handleCommand(chatId, userId, text);
       } else {
         await handleChat(chatId, userId, text);
       }
     }
   } catch (error) {
-    logger.error("Error handling message", { userId, chatId, message: error.message, stack: error.stack });
-    let userMessage = t(lang, "errorGeneric");
+    console.error("Error handling message:", { userId, chatId, error: error.message, stack: error.stack });
+    let userMessage = "⚠️ Something went wrong. Try again in a moment.";
     if (error?.status === 429 || error?.message?.toLowerCase().includes("rate limit")) {
-      userMessage = t(lang, "errorAiBusy");
+      userMessage = "⚠️ AI service is busy right now. Please wait a moment and try again.";
     } else if (error?.code === "ECONNRESET" || error?.message?.toLowerCase().includes("timeout")) {
-      userMessage = t(lang, "errorTimeout");
+      userMessage = "⚠️ Request timed out. Please try again.";
     } else if (error?.status >= 500) {
-      userMessage = t(lang, "errorUnavailable");
+      userMessage = "⚠️ AI service is temporarily unavailable. Please try again later.";
     }
     await sendMessage(chatId, userMessage);
   }
@@ -237,19 +228,37 @@ function parseFilters(input) {
   return { query, filters };
 }
 
-async function handleCommand(chatId, userId, text, lang = "en") {
+async function handleCommand(chatId, userId, text) {
   const [command, ...args] = text.split(" ");
   const rawArgs = args.join(" ");
 
   switch (command.toLowerCase().replace(/@\w+/, "")) {
     case "/start":
     case "/help":
-      await sendMessage(chatId, t(lang, "helpText", profile.name));
+      await sendMessage(
+        chatId,
+        `🎯 *JobRadar AI* — Your Career Assistant\n\n` +
+          `Hey ${profile.name}! Here's what I can do:\n\n` +
+          `🔍 /search — Find remote jobs for your profile\n` +
+          `🔍 /search _keywords_ — Search with specific terms\n` +
+          `🔍 /search --location europe --type fulltime --industry fintech\n` +
+          `📄 /cv — Get CV improvement advice\n` +
+          `📎 Send a PDF or DOCX file to analyze that CV\n` +
+          `✉️ /cover — Generate a cover letter\n` +
+          `💰 /salary — Salary market insights\n` +
+          `👤 /profile — View your profile summary\n\n` +
+          `Or just chat naturally! I understand context.\n\n` +
+          `_Examples:_\n` +
+          `• "Find Android jobs paying over $150k"\n` +
+          `• "Write a cover letter for Spotify"\n` +
+          `• "Is my CV good for FAANG?"\n` +
+          `• "What should I charge as a contractor?"`,
+      );
       break;
 
     case "/search": {
       const { query: searchQuery, filters } = parseFilters(rawArgs);
-      await sendMessage(chatId, t(lang, "scanningJobs"));
+      await sendMessage(chatId, "🔍 Scanning job boards...");
       await sendTyping(chatId);
       const jobs = await searchJobs(searchQuery, filters);
       addToHistory(userId, "user", `Search for jobs: ${searchQuery || "general search"}`);
@@ -272,7 +281,10 @@ async function handleCommand(chatId, userId, text, lang = "en") {
 
     case "/cover":
       if (!rawArgs) {
-        await sendMessage(chatId, t(lang, "coverLetterPrompt"));
+        await sendMessage(
+          chatId,
+          "✉️ Tell me the role! Example:\n`/cover Staff Android Engineer at Spotify`",
+        );
         return;
       }
       await sendMessage(chatId, t(lang, "writingCoverLetter"));
@@ -295,9 +307,8 @@ async function handleCommand(chatId, userId, text, lang = "en") {
       const salaryQuery = salaryFilterInput.replace(/--?(location|role)\s+\S+/gi, "").trim();
       await sendMessage(chatId, t(lang, "researchingRates"));
       await sendTyping(chatId);
-      const salary = await salaryIntel(salaryQuery || null, salaryFilters.location, salaryFilters.role);
-      const salaryLabel = [salaryFilters.role, salaryFilters.location, salaryQuery].filter(Boolean).join(", ") || "general";
-      addToHistory(userId, "user", `Salary info: ${salaryLabel}`);
+      const salary = await salaryIntel(rawArgs);
+      addToHistory(userId, "user", `Salary info: ${rawArgs || "general"}`);
       addToHistory(userId, "assistant", salary);
       trackUsage(userId, "salary");
       await sendMessage(chatId, salary);

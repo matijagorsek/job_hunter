@@ -18,7 +18,11 @@ if (!process.env.ALLOWED_CHAT_IDS) {
 const PORT = process.env.PORT || 3847;
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 const WEBHOOK_URL = `https://${process.env.WEBHOOK_DOMAIN}/webhook`;
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
+const { WEBHOOK_SECRET } = process.env;
+
+const TIMESTAMP_TOLERANCE_SEC = 300; // 5 minutes
+const MAX_SEEN_IDS = 500;
+const seenUpdateIds = new Set();
 
 // Health check
 app.get("/", (_req, res) => {
@@ -34,11 +38,29 @@ app.post("/webhook", async (req, res) => {
   if (!WEBHOOK_SECRET || req.headers["x-telegram-bot-api-secret-token"] !== WEBHOOK_SECRET) {
     return res.sendStatus(401);
   }
+
+  const update = req.body;
+
+  // Drop exact replay within the session
+  if (seenUpdateIds.has(update.update_id)) {
+    return res.sendStatus(200);
+  }
+  seenUpdateIds.add(update.update_id);
+  if (seenUpdateIds.size > MAX_SEEN_IDS) {
+    seenUpdateIds.delete(seenUpdateIds.values().next().value);
+  }
+
+  // Reject stale deliveries (> 5 min clock drift)
+  const msgDate = update.message && update.message.date;
+  if (msgDate && Math.abs(Date.now() / 1000 - msgDate) > TIMESTAMP_TOLERANCE_SEC) {
+    return res.sendStatus(200);
+  }
+
   // Respond immediately so Telegram doesn't retry
   res.sendStatus(200);
 
   try {
-    await handleUpdate(req.body);
+    await handleUpdate(update);
   } catch (error) {
     logger.error("Webhook error", { message: error.message, stack: error.stack });
   }

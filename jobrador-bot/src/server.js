@@ -55,7 +55,7 @@ async function setupWebhook() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         url: WEBHOOK_URL,
-        allowed_updates: ["message"],
+        allowed_updates: ["message", "callback_query"],
         drop_pending_updates: true,
         ...(WEBHOOK_SECRET && { secret_token: WEBHOOK_SECRET }),
       }),
@@ -84,6 +84,9 @@ async function setBotCommands() {
         { command: "cv", description: "📄 CV improvement advice" },
         { command: "cover", description: "✉️ Generate cover letter" },
         { command: "salary", description: "💰 Salary market insights" },
+        { command: "save", description: "📌 Save a job for interview prep" },
+        { command: "board", description: "📋 View saved jobs" },
+        { command: "prep", description: "🎯 Interview coaching for a saved job" },
         { command: "profile", description: "👤 View your profile" },
         { command: "stats", description: "📊 Your job search statistics" },
         { command: "remind", description: "🔔 Toggle daily job search reminder" },

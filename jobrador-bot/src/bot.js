@@ -3,10 +3,36 @@ const { searchJobs } = require("./agents/jobSearch");
 const { adviseCv, analyzeCvDocument } = require("./agents/cvAdvisor");
 const { generateCoverLetter } = require("./agents/coverLetter");
 const { salaryIntel } = require("./agents/salary");
+const { saveJob, updateStatus, getBoard } = require("./jobBoard");
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
 
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
+
+const STATUS_EMOJI  = { saved: '📌', applied: '✅', interview: '🎙', offer: '🎉', rejected: '❌' };
+const STATUS_LABEL  = { saved: 'Saved', applied: 'Applied', interview: 'Interview', offer: 'Offer', rejected: 'Rejected' };
+const ACTION_TO_STATUS = { apply: 'applied', reject: 'rejected', interview: 'interview', offer: 'offer' };
+
+function formatJobLine(job) {
+  const company = job.company ? ` @ ${job.company}` : '';
+  return `• \`${job.id}\` — ${job.title}${company}\n  ${job.url}`;
+}
+
+function buildJobInlineKeyboard(job) {
+  const transitions = {
+    saved:     [['✅ Applied', 'applied'], ['❌ Reject', 'rejected']],
+    applied:   [['🎙 Interview', 'interview'], ['❌ Reject', 'rejected']],
+    interview: [['🎉 Offer', 'offer'], ['❌ Reject', 'rejected']],
+    offer:     [],
+    rejected:  [['↩️ Restore', 'saved']],
+  };
+  const buttons = (transitions[job.status] || []).map(([text, action]) => ({
+    text,
+    callback_data: `board_${action}_${job.id}`,
+  }));
+  if (!buttons.length) return undefined;
+  return { inline_keyboard: [buttons] };
+}
 
 const ALLOWED_CHAT_IDS = process.env.ALLOWED_CHAT_IDS
   ? process.env.ALLOWED_CHAT_IDS.split(",").map((id) => parseInt(id.trim(), 10))
@@ -120,6 +146,49 @@ async function sendTyping(chatId) {
   }).catch(() => {});
 }
 
+async function answerCallbackQuery(queryId, text = '') {
+  await fetch(`${TELEGRAM_API}/answerCallbackQuery`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ callback_query_id: queryId, text }),
+  }).catch(() => {});
+}
+
+async function handleCallbackQuery(query) {
+  const chatId = query.message.chat.id;
+  if (!ALLOWED_CHAT_IDS.includes(chatId)) {
+    await answerCallbackQuery(query.id, 'Unauthorised');
+    return;
+  }
+
+  const parts = query.data.split('_');
+  if (parts[0] !== 'board' || parts.length !== 3) {
+    await answerCallbackQuery(query.id);
+    return;
+  }
+
+  const [, action, id] = parts;
+  const job = updateStatus(id, action);
+  if (!job) {
+    await answerCallbackQuery(query.id, 'Job not found');
+    return;
+  }
+
+  await answerCallbackQuery(query.id, `Moved to ${STATUS_LABEL[action]}`);
+  const company = job.company ? ` @ ${job.company}` : '';
+  const keyboard = buildJobInlineKeyboard(job);
+  await fetch(`${TELEGRAM_API}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: `${STATUS_EMOJI[job.status]} *${job.title}*${company} → *${STATUS_LABEL[job.status]}*`,
+      parse_mode: 'Markdown',
+      ...(keyboard && { reply_markup: keyboard }),
+    }),
+  }).catch(() => {});
+}
+
 const SUPPORTED_CV_MIME_TYPES = {
   "application/pdf": "pdf",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
@@ -172,6 +241,11 @@ async function handleDocument(chatId, userId, document) {
 }
 
 async function handleUpdate(update) {
+  if (update.callback_query) {
+    await handleCallbackQuery(update.callback_query);
+    return;
+  }
+
   const message = update.message;
   if (!message) return;
 
@@ -394,6 +468,97 @@ async function handleCommand(chatId, userId, text) {
       } else {
         await sendMessage(chatId, t(lang, "reminderUsage"));
       }
+      break;
+    }
+
+    case "/save": {
+      if (!rawArgs.trim()) {
+        await sendMessage(chatId, '💾 Usage: `/save <url> [title] [at company]`\nExample: `/save https://jobs.example.com/123 Senior Android at Spotify`');
+        return;
+      }
+      const urlMatch = rawArgs.trim().match(/^(https?:\/\/\S+)(.*)?$/);
+      if (!urlMatch) {
+        await sendMessage(chatId, '⚠️ Please provide a valid URL starting with http:// or https://');
+        return;
+      }
+      const url = urlMatch[1];
+      const rest = (urlMatch[2] || '').trim();
+      let title = '';
+      let company = '';
+      const atIdx = rest.toLowerCase().lastIndexOf(' at ');
+      if (atIdx !== -1) {
+        title = rest.slice(0, atIdx).trim();
+        company = rest.slice(atIdx + 4).trim();
+      } else {
+        title = rest;
+      }
+      const { job, created } = saveJob(url, title, company);
+      if (!created) {
+        await sendMessage(chatId, `ℹ️ Already saved as \`${job.id}\` (status: *${STATUS_LABEL[job.status]}*)`);
+        return;
+      }
+      const saveCompany = job.company ? ` @ ${job.company}` : '';
+      const saveKeyboard = buildJobInlineKeyboard(job);
+      await fetch(`${TELEGRAM_API}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: `💾 Saved *${job.title}*${saveCompany}\nID: \`${job.id}\`\n${job.url}`,
+          parse_mode: 'Markdown',
+          disable_web_page_preview: true,
+          ...(saveKeyboard && { reply_markup: saveKeyboard }),
+        }),
+      }).catch(() => {});
+      break;
+    }
+
+    case "/board": {
+      const board = getBoard();
+      const total = Object.values(board).reduce((sum, jobs) => sum + jobs.length, 0);
+      if (!total) {
+        await sendMessage(chatId, '📋 *Job Board*\n\nNo saved jobs yet.\n\nUse `/save <url> [title] [at company]` to save a job.');
+        return;
+      }
+      const lines = ['📋 *Job Board*\n'];
+      for (const status of ['saved', 'applied', 'interview', 'offer', 'rejected']) {
+        const jobs = board[status];
+        lines.push(`${STATUS_EMOJI[status]} *${STATUS_LABEL[status]}* (${jobs.length})`);
+        if (jobs.length) lines.push(jobs.map(formatJobLine).join('\n'));
+      }
+      lines.push('\n_Use /apply, /reject, /interview, /offer <id> to move jobs_');
+      await sendMessage(chatId, lines.join('\n'));
+      break;
+    }
+
+    case "/apply":
+    case "/reject":
+    case "/interview":
+    case "/offer": {
+      const cmdName = command.toLowerCase().replace(/^\//, '').replace(/@\w+$/, '');
+      const newStatus = ACTION_TO_STATUS[cmdName];
+      const jobId = rawArgs.trim();
+      if (!jobId) {
+        await sendMessage(chatId, `⚠️ Usage: \`${command} <id>\`\nUse /board to see job IDs.`);
+        return;
+      }
+      const updatedJob = updateStatus(jobId, newStatus);
+      if (!updatedJob) {
+        await sendMessage(chatId, `⚠️ Job \`${jobId}\` not found. Use /board to see your saved jobs.`);
+        return;
+      }
+      const updCompany = updatedJob.company ? ` @ ${updatedJob.company}` : '';
+      const updKeyboard = buildJobInlineKeyboard(updatedJob);
+      await fetch(`${TELEGRAM_API}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: `${STATUS_EMOJI[updatedJob.status]} *${updatedJob.title}*${updCompany} → *${STATUS_LABEL[updatedJob.status]}*`,
+          parse_mode: 'Markdown',
+          ...(updKeyboard && { reply_markup: updKeyboard }),
+        }),
+      }).catch(() => {});
       break;
     }
 

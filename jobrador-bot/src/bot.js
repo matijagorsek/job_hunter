@@ -3,6 +3,7 @@ const { searchJobs } = require("./agents/jobSearch");
 const { adviseCv, analyzeCvDocument } = require("./agents/cvAdvisor");
 const { generateCoverLetter } = require("./agents/coverLetter");
 const { salaryIntel } = require("./agents/salary");
+const { analyseJobFit } = require("./agents/gapAnalyser");
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
 
@@ -147,6 +148,27 @@ async function extractTextFromBuffer(buffer, format) {
   return null;
 }
 
+async function fetchJobDescription(url) {
+  const res = await fetch(url, {
+    headers: { "User-Agent": "Mozilla/5.0 (compatible; JobRadar/1.0)" },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const html = await res.text();
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 8000);
+}
+
 async function handleDocument(chatId, userId, document) {
   const format = SUPPORTED_CV_MIME_TYPES[document.mime_type];
   if (!format) {
@@ -243,6 +265,7 @@ async function handleCommand(chatId, userId, text) {
           `🔍 /search _keywords_ — Search with specific terms\n` +
           `🔍 /search --location europe --type fulltime --industry fintech\n` +
           `📄 /cv — Get CV improvement advice\n` +
+          `🔎 /analyse <url_or_jd> — CV-to-Job gap analysis with scored fit report\n` +
           `📎 Send a PDF or DOCX file to analyze that CV\n` +
           `✉️ /cover — Generate a cover letter\n` +
           `💰 /salary — Salary market insights\n` +
@@ -394,6 +417,38 @@ async function handleCommand(chatId, userId, text) {
       } else {
         await sendMessage(chatId, t(lang, "reminderUsage"));
       }
+      break;
+    }
+
+    case "/analyse": {
+      if (!rawArgs) {
+        await sendMessage(
+          chatId,
+          "🔎 *CV-to-Job Gap Analyser*\n\nUsage:\n" +
+            "`/analyse <job_url>` — paste a job posting URL\n" +
+            "`/analyse <job description text>` — paste the JD directly",
+        );
+        break;
+      }
+      await sendMessage(chatId, "🔎 Analysing job fit against your CV...");
+      await sendTyping(chatId);
+      let jdText = rawArgs;
+      if (/^https?:\/\//i.test(rawArgs)) {
+        try {
+          jdText = await fetchJobDescription(rawArgs);
+          if (!jdText || jdText.length < 100) {
+            await sendMessage(chatId, "⚠️ Could not extract enough text from that URL. Try pasting the job description directly.");
+            break;
+          }
+        } catch {
+          await sendMessage(chatId, "⚠️ Failed to fetch that URL. Try pasting the job description text directly.");
+          break;
+        }
+      }
+      const report = await analyseJobFit(jdText);
+      addToHistory(userId, "user", `Gap analysis for: ${rawArgs.slice(0, 80)}`);
+      addToHistory(userId, "assistant", report);
+      await sendMessage(chatId, report);
       break;
     }
 

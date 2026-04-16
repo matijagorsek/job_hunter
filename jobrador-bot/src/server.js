@@ -15,6 +15,11 @@ if (!process.env.ALLOWED_CHAT_IDS) {
   process.exit(1);
 }
 
+if (!process.env.WEBHOOK_SECRET) {
+  console.error("FATAL: WEBHOOK_SECRET env var is not set. Refusing to start.");
+  process.exit(1);
+}
+
 const PORT = process.env.PORT || 3847;
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 const WEBHOOK_URL = `https://${process.env.WEBHOOK_DOMAIN}/webhook`;
@@ -31,7 +36,8 @@ app.get("/", (_req, res) => {
 
 // Telegram webhook endpoint
 app.post("/webhook", async (req, res) => {
-  if (!WEBHOOK_SECRET || req.headers["x-telegram-bot-api-secret-token"] !== WEBHOOK_SECRET) {
+  const incoming = req.headers["x-telegram-bot-api-secret-token"];
+  if (!incoming || !crypto.timingSafeEqual(Buffer.from(incoming), Buffer.from(WEBHOOK_SECRET))) {
     return res.sendStatus(401);
   }
   // Respond immediately so Telegram doesn't retry

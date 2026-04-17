@@ -4,6 +4,8 @@ const crypto = require("crypto");
 const express = require("express");
 const { handleUpdate, sendMessage } = require("./bot");
 const { getReminderChats, getUserStats } = require("./stats");
+const { filterAndMarkNew } = require("./seenJobs");
+const { searchJobs } = require("./agents/jobSearch");
 const { t } = require("./i18n");
 const logger = require("./logger");
 
@@ -104,6 +106,7 @@ async function setBotCommands() {
       commands: [
         { command: "search", description: "🔍 Search remote jobs" },
         { command: "cv", description: "📄 CV improvement advice" },
+        { command: "analyse", description: "🔎 CV-to-Job gap analysis & fit score" },
         { command: "cover", description: "✉️ Generate cover letter" },
         { command: "salary", description: "💰 Salary market insights" },
         { command: "save", description: "📌 Save a job for interview prep" },
@@ -118,15 +121,15 @@ async function setBotCommands() {
   }).catch(() => {});
 }
 
-function scheduleReminders() {
-  function msUntilNextUTCHour(hour) {
-    const now = new Date();
-    const target = new Date(now);
-    target.setUTCHours(hour, 0, 0, 0);
-    if (target <= now) target.setUTCDate(target.getUTCDate() + 1);
-    return target.getTime() - now.getTime();
-  }
+function msUntilNextUTCHour(hour) {
+  const now = new Date();
+  const target = new Date(now);
+  target.setUTCHours(hour, 0, 0, 0);
+  if (target <= now) target.setUTCDate(target.getUTCDate() + 1);
+  return target.getTime() - now.getTime();
+}
 
+function scheduleReminders() {
   async function sendReminders() {
     const reminders = getReminderChats();
     for (const { chatId, userId } of reminders) {
@@ -142,6 +145,32 @@ function scheduleReminders() {
   logger.info("Daily reminder scheduler initialized");
 }
 
+function scheduleDailyDigest() {
+  async function runDigest() {
+    const users = getReminderChats();
+    for (const { chatId, userId } of users) {
+      try {
+        const stat = getUserStats(userId);
+        const query = (stat.recentSearches || [])[0] || null;
+        const result = await searchJobs(query, {});
+        const newJobsText = filterAndMarkNew(userId, result);
+        if (newJobsText.trim().length > 0) {
+          await sendMessage(
+            chatId,
+            `🌅 *Morning Job Digest*\n_New listings matching your profile:_\n\n${newJobsText}`,
+          ).catch(() => {});
+        }
+      } catch (err) {
+        logger.error("Daily digest error", { userId, message: err.message });
+      }
+    }
+    setTimeout(runDigest, 24 * 60 * 60 * 1000);
+  }
+
+  setTimeout(runDigest, msUntilNextUTCHour(8));
+  logger.info("Daily digest scheduler initialized");
+}
+
 if (require.main === module) {
   // Start server
   app.listen(PORT, async () => {
@@ -150,6 +179,7 @@ if (require.main === module) {
     await setupWebhook();
     await setBotCommands();
     scheduleReminders();
+    scheduleDailyDigest();
   });
 
   // Global error handlers for clean PM2 restarts

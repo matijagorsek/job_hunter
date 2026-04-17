@@ -4,9 +4,10 @@
 
 PATTERN='(TELEGRAM_BOT_TOKEN|BOT_TOKEN|ANTHROPIC_API_KEY|WEBHOOK_SECRET)\s*=\s*[^${"'"'"'<>[:space:]][^[:space:]]{8,}'
 
-if git diff --cached --name-only | xargs grep -Eq "$PATTERN" 2>/dev/null; then
+OFFENDING=$(git diff --cached --name-only | xargs grep -E "$PATTERN" 2>/dev/null | grep -vE '(process\.env\.|os\.environ\[)')
+if [ -n "$OFFENDING" ]; then
     echo "ERROR: Staged files appear to contain credentials. Use environment variables instead." >&2
     echo "       Offending lines:" >&2
-    git diff --cached | grep -E "^\+.*${PATTERN}" >&2
+    echo "$OFFENDING" >&2
     exit 1
 fi

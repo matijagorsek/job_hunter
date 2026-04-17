@@ -1,8 +1,11 @@
+const crypto = require("crypto");
 const { chat, profile, saveProfile } = require("./claude");
 const { searchJobs } = require("./agents/jobSearch");
 const { adviseCv, analyzeCvDocument } = require("./agents/cvAdvisor");
 const { generateCoverLetter } = require("./agents/coverLetter");
 const { salaryIntel } = require("./agents/salary");
+const { saveJob, getJob, listJobs } = require("./savedJobs");
+const { generateQuestions, generateModelAnswer, evaluateAnswer } = require("./agents/interviewPrep");
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
 
@@ -15,6 +18,9 @@ const ALLOWED_CHAT_IDS = process.env.ALLOWED_CHAT_IDS
 // Per-user conversation history (in-memory, resets on restart)
 const conversations = new Map();
 const MAX_HISTORY = 20; // keep last 20 messages per user
+
+// Interview prep sessions: sessionId → { chatId, jobId, jobTitle, jobCompany, questions, currentIndex, awaitingAnswer }
+const prepSessions = new Map();
 
 // Rate limiting: max 5 requests per 60 seconds per user
 const rateLimitMap = new Map();
@@ -171,7 +177,83 @@ async function handleDocument(chatId, userId, document) {
   await sendMessage(chatId, advice);
 }
 
+async function sendNextQuestion(chatId, session, sessionId) {
+  if (session.currentIndex >= session.questions.length) {
+    prepSessions.delete(sessionId);
+    await sendMessage(
+      chatId,
+      `🎉 *Interview prep complete!*\n\nYou've gone through all ${session.questions.length} questions for *${session.jobTitle}* at *${session.jobCompany}*.\n\nGood luck with your interview! 🍀`,
+    );
+    return;
+  }
+
+  const q = session.questions[session.currentIndex];
+  const current = session.currentIndex + 1;
+  const total = session.questions.length;
+
+  await fetch(`${TELEGRAM_API}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: `*Question ${current}/${total}* — ${q.category}\n\n${q.question}`,
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [[
+          { text: "💬 Answer", callback_data: `answer:${sessionId}` },
+          { text: "⏭ Skip", callback_data: `skip:${sessionId}` },
+          { text: "💡 Model answer", callback_data: `model:${sessionId}` },
+        ]],
+      },
+    }),
+  }).catch(() => {});
+}
+
+async function handleCallbackQuery(callbackQuery) {
+  const chatId = callbackQuery.message.chat.id;
+  if (!ALLOWED_CHAT_IDS.includes(chatId)) return;
+
+  await fetch(`${TELEGRAM_API}/answerCallbackQuery`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ callback_query_id: callbackQuery.id }),
+  }).catch(() => {});
+
+  const colonIdx = (callbackQuery.data || "").indexOf(":");
+  const action = callbackQuery.data.slice(0, colonIdx);
+  const sessionId = callbackQuery.data.slice(colonIdx + 1);
+  const session = prepSessions.get(sessionId);
+
+  if (!session || session.chatId !== chatId) {
+    await sendMessage(chatId, "⚠️ This session has expired. Use /prep to start a new one.");
+    return;
+  }
+
+  const q = session.questions[session.currentIndex];
+
+  if (action === "skip") {
+    session.currentIndex++;
+    await sendNextQuestion(chatId, session, sessionId);
+  } else if (action === "answer") {
+    session.awaitingAnswer = true;
+    await sendMessage(chatId, `💬 Type your answer for:\n\n_${q.question}_`);
+  } else if (action === "model") {
+    await sendTyping(chatId);
+    const modelAnswer = await generateModelAnswer(session.jobTitle, session.jobCompany, q.question);
+    await sendMessage(chatId, `💡 *Model Answer:*\n\n${modelAnswer}`);
+    session.currentIndex++;
+    await sendNextQuestion(chatId, session, sessionId);
+  }
+}
+
 async function handleUpdate(update) {
+  if (update.callback_query) {
+    await handleCallbackQuery(update.callback_query).catch((err) => {
+      console.error("Error handling callback query:", { error: err.message, stack: err.stack });
+    });
+    return;
+  }
+
   const message = update.message;
   if (!message) return;
 
@@ -197,6 +279,23 @@ async function handleUpdate(update) {
       await handleDocument(chatId, userId, message.document);
     } else if (message.text) {
       const text = message.text.trim();
+
+      // Check if we're waiting for a prep answer from this user
+      const activeEntry = [...prepSessions.entries()].find(
+        ([, s]) => s.chatId === chatId && s.awaitingAnswer,
+      );
+      if (activeEntry && !text.startsWith("/")) {
+        const [sessionId, session] = activeEntry;
+        session.awaitingAnswer = false;
+        const q = session.questions[session.currentIndex];
+        await sendTyping(chatId);
+        const feedback = await evaluateAnswer(q.question, text, session.jobTitle);
+        await sendMessage(chatId, `📊 *Feedback:*\n\n${feedback}`);
+        session.currentIndex++;
+        await sendNextQuestion(chatId, session, sessionId);
+        return;
+      }
+
       if (text.startsWith("/")) {
         await handleCommand(chatId, userId, text);
       } else {
@@ -246,6 +345,9 @@ async function handleCommand(chatId, userId, text) {
           `📎 Send a PDF or DOCX file to analyze that CV\n` +
           `✉️ /cover — Generate a cover letter\n` +
           `💰 /salary — Salary market insights\n` +
+          `📌 /save — Save a job for interview prep\n` +
+          `📋 /board — View saved jobs\n` +
+          `🎯 /prep <id> — Start interview coaching for a saved job\n` +
           `👤 /profile — View your profile summary\n\n` +
           `Or just chat naturally! I understand context.\n\n` +
           `_Examples:_\n` +
@@ -374,6 +476,87 @@ async function handleCommand(chatId, userId, text) {
           `*Type:* Full remote, ${profile.preferences.contractType.join(" or ")}\n\n` +
           `_Use /profile set <field> <value> to update_`,
       );
+      break;
+    }
+
+    case "/save": {
+      if (!rawArgs) {
+        await sendMessage(
+          chatId,
+          `📌 Save a job to your board for interview prep.\n\nFormat:\n\`/save <title> at <company>\`\n\`<paste the job description here>\`\n\nExample:\n\`/save Senior Android Dev at Spotify\`\n\`We are looking for a Kotlin expert...\``,
+        );
+        break;
+      }
+      const saveLines = rawArgs.split("\n");
+      const firstLine = saveLines[0].trim();
+      const jd = saveLines.slice(1).join("\n").trim();
+      if (!jd) {
+        await sendMessage(
+          chatId,
+          `📌 Please include the job description on a new line after the title.\n\nExample:\n\`/save Senior Android Dev at Spotify\`\n\`We are looking for a Kotlin expert...\``,
+        );
+        break;
+      }
+      const atMatch = firstLine.match(/^(.+?)\s+(?:at|@)\s+(.+)$/i);
+      if (!atMatch) {
+        await sendMessage(chatId, `📌 Format: \`/save <title> at <company>\`\n\`<job description>\``);
+        break;
+      }
+      const jobTitle = atMatch[1].trim();
+      const jobCompany = atMatch[2].trim();
+      const jobId = saveJob(userId, jobTitle, jobCompany, jd);
+      await sendMessage(
+        chatId,
+        `✅ Job saved! ID: \`${jobId}\`\n\n*${jobTitle}* at *${jobCompany}*\n\nUse \`/prep ${jobId}\` to start interview prep.`,
+      );
+      break;
+    }
+
+    case "/board": {
+      const savedJobs = listJobs(userId);
+      if (savedJobs.length === 0) {
+        await sendMessage(chatId, `📋 No saved jobs yet.\n\nUse /save to add jobs for interview prep.`);
+        break;
+      }
+      const jobList = savedJobs
+        .map((j) => `• \`${j.id}\` — *${j.title}* at *${j.company}*`)
+        .join("\n");
+      await sendMessage(chatId, `📋 *Your Saved Jobs*\n\n${jobList}\n\nUse \`/prep <id>\` to start interview prep.`);
+      break;
+    }
+
+    case "/prep": {
+      const targetJobId = rawArgs.trim();
+      if (!targetJobId) {
+        await sendMessage(chatId, `🎯 Usage: \`/prep <job-id>\`\n\nSee your saved jobs with /board`);
+        break;
+      }
+      const job = getJob(userId, targetJobId);
+      if (!job) {
+        await sendMessage(
+          chatId,
+          `❌ No saved job found with ID \`${targetJobId}\`.\n\nSee your saved jobs with /board`,
+        );
+        break;
+      }
+      await sendMessage(chatId, `🎯 Generating interview questions for *${job.title}* at *${job.company}*...`);
+      await sendTyping(chatId);
+      const questions = await generateQuestions(job.title, job.company, job.jd);
+      const sessionId = crypto.randomBytes(4).toString("hex");
+      prepSessions.set(sessionId, {
+        chatId,
+        jobId: targetJobId,
+        jobTitle: job.title,
+        jobCompany: job.company,
+        questions,
+        currentIndex: 0,
+        awaitingAnswer: false,
+      });
+      await sendMessage(
+        chatId,
+        `📝 Got *${questions.length} questions* ready!\n\nFor each question you can:\n• *Answer* — type your answer and get coaching feedback\n• *Skip* — move to the next question\n• *Model answer* — see a strong sample answer\n\nStarting now 👇`,
+      );
+      await sendNextQuestion(chatId, prepSessions.get(sessionId), sessionId);
       break;
     }
 

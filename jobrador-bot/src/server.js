@@ -1,5 +1,14 @@
 require("dotenv").config();
 
+if (!process.env.TELEGRAM_BOT_TOKEN) {
+  console.error("TELEGRAM_BOT_TOKEN is not set");
+  process.exit(1);
+}
+if (!process.env.ANTHROPIC_API_KEY) {
+  console.error("ANTHROPIC_API_KEY is not set");
+  process.exit(1);
+}
+
 const express = require("express");
 const { handleUpdate } = require("./bot");
 

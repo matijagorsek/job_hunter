@@ -68,3 +68,71 @@ describe("POST /webhook - authentication", () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe("POST /webhook - replay protection", () => {
+  const validToken = process.env.WEBHOOK_SECRET;
+
+  test("drops duplicate update_id without calling handleUpdate again", async () => {
+    const { handleUpdate } = require("../../src/bot");
+    handleUpdate.mockClear();
+
+    const update = { update_id: 1001, message: { text: "hi", chat: { id: 100 }, date: Math.floor(Date.now() / 1000) } };
+
+    await request(app)
+      .post("/webhook")
+      .set("x-telegram-bot-api-secret-token", validToken)
+      .send(update);
+
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(handleUpdate).toHaveBeenCalledTimes(1);
+
+    handleUpdate.mockClear();
+
+    const res = await request(app)
+      .post("/webhook")
+      .set("x-telegram-bot-api-secret-token", validToken)
+      .send(update);
+
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(res.status).toBe(200);
+    expect(handleUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /webhook - timestamp validation", () => {
+  const validToken = process.env.WEBHOOK_SECRET;
+
+  test("drops update with stale timestamp and returns 200 without calling handleUpdate", async () => {
+    const { handleUpdate } = require("../../src/bot");
+    handleUpdate.mockClear();
+
+    const staleDate = Math.floor(Date.now() / 1000) - 400; // 400 sec ago
+    const update = { update_id: 2001, message: { text: "old", chat: { id: 100 }, date: staleDate } };
+
+    const res = await request(app)
+      .post("/webhook")
+      .set("x-telegram-bot-api-secret-token", validToken)
+      .send(update);
+
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(res.status).toBe(200);
+    expect(handleUpdate).not.toHaveBeenCalled();
+  });
+
+  test("processes update with fresh timestamp", async () => {
+    const { handleUpdate } = require("../../src/bot");
+    handleUpdate.mockClear();
+
+    const freshDate = Math.floor(Date.now() / 1000) - 10;
+    const update = { update_id: 2002, message: { text: "fresh", chat: { id: 100 }, date: freshDate } };
+
+    const res = await request(app)
+      .post("/webhook")
+      .set("x-telegram-bot-api-secret-token", validToken)
+      .send(update);
+
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(res.status).toBe(200);
+    expect(handleUpdate).toHaveBeenCalledWith(update);
+  });
+});
